@@ -1,0 +1,27 @@
+# ============================================
+# .docker-env-chain — the project-level env chain (Layer 1).
+#
+# The compose-envkit shim (./docker, via scripts/compose-env.sh) reads this
+# file, substitutes ${ENV} (a.k.a. ${COMPOSE_ENV}; resolved as shell COMPOSE_ENV
+# > .env COMPOSE_ENV > "dev"), drops non-existent files, and feeds the result
+# into COMPOSE_ENV_FILES. Each LATER layer OVERRIDES earlier ones (compose
+# merges last-wins). Non-existent files are silently skipped.
+#
+# Container env_file: paths (the ones listed under each service in your
+# docker-compose*.yml, e.g. db/.env.db, app/.env.app) are AUTO-DISCOVERED by
+# scripts/parse-compose-env-files.sh — do NOT duplicate them here.
+#
+# Layout (committed templates → gitignored runtime copies):
+#   Layer 1: root base + env-specific overlay
+#     .env            ← non-secret defaults (cp from example.env)
+#     .${ENV}.env     ← per-environment overlay (.dev.env / .prod.env / …)
+#   Layer 2: SECRETS (last wins, gitignored)
+#     .secrets.env    ← cp from example.secrets.env, fill real values
+# ============================================
+
+# Layer 1: root base + env-specific overlay
+.env
+.${ENV}.env
+
+# Layer 2: SECRETS (gitignored, override everything above) — MUST be last
+.secrets.env

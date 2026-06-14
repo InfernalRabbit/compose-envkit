@@ -1,0 +1,70 @@
+#!/bin/sh
+# ============================================
+# docker — universal compose-envkit shim.
+#
+# A thin, self-locating front-end for the env-chain engine
+# (scripts/compose-env.sh). Vendored into a project by install.sh as
+# <project>/docker. The same shim works at the repo root and inside any
+# subproject that vendors its own copy of scripts/.
+#
+# Responsibilities:
+#   1. Locate the engine (own scripts/ → parent's scripts/, first found wins).
+#   2. Invoke it with PROJECT_DIR = the shim's own directory.
+#   3. Inline minimal fallback for standalone-clone scenarios where no
+#      scripts/compose-env.sh is reachable.
+#
+# Subcommands (forwarded to the engine):
+#   ./docker env-files      print resolved COMPOSE_ENV_FILES (one path/line)
+#   ./docker compose <args> → docker compose <args> with the chain exported
+#   ./docker <args>         → docker <args> (passthrough)
+# ============================================
+
+SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+# Locate the universal engine (first found wins): own scripts/, then parent's.
+for _cand in \
+  "$SELF_DIR/scripts/compose-env.sh" \
+  "$SELF_DIR/../scripts/compose-env.sh"; do
+  if [ -f "$_cand" ]; then
+    exec sh "$_cand" "$SELF_DIR" "$@"
+  fi
+done
+
+# --- Fallback (engine not found) ---
+# Minimal Layer-1-only chain: reads .docker-env-chain or built-in defaults.
+# Used when a subproject is cloned standalone without a reachable scripts/.
+# (No Layer-2 env_file: discovery here — that lives in the full engine.)
+
+_FILE_ENV=$(grep -m1 '^COMPOSE_ENV=' "${SELF_DIR}/.env" 2>/dev/null | cut -d= -f2)
+ENV=${COMPOSE_ENV:-${_FILE_ENV:-dev}}
+
+_FILES=""
+if [ -f "${SELF_DIR}/.docker-env-chain" ]; then
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    case "$_line" in ''|\#*) continue ;; esac
+    _line=$(printf '%s' "$_line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    [ -z "$_line" ] && continue
+    _line=$(printf '%s' "$_line" | sed "s|\${ENV}|${ENV}|g; s|\${COMPOSE_ENV}|${ENV}|g")
+    _abs="${SELF_DIR}/${_line}"
+    [ -f "$_abs" ] && _FILES="${_FILES:+${_FILES},}${_abs}"
+  done < "${SELF_DIR}/.docker-env-chain"
+else
+  for _f in "${SELF_DIR}/.env" "${SELF_DIR}/.${ENV}.env" "${SELF_DIR}/.secrets.env"; do
+    [ -f "$_f" ] && _FILES="${_FILES:+${_FILES},}${_f}"
+  done
+fi
+export COMPOSE_ENV_FILES="$_FILES"
+
+case "${1:-}" in
+  env-files)
+    [ -n "$COMPOSE_ENV_FILES" ] && printf '%s\n' "$COMPOSE_ENV_FILES" | tr ',' '\n'
+    exit 0
+    ;;
+  compose)
+    shift
+    cd "$SELF_DIR" && exec docker compose "$@"
+    ;;
+  *)
+    exec docker "$@"
+    ;;
+esac

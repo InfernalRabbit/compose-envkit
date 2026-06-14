@@ -1,0 +1,22 @@
+# compose-envkit — ignore real env files; keep the committed templates.
+#
+# The env-chain's runtime files are project-local and may carry secrets, so
+# they must never be committed. The example.* / templates are tracked.
+
+# Real env files (runtime copies of the templates)
+.env
+.*.env
+.secrets.env
+
+# But always keep the tracked templates
+!example.env
+!example.*.env
+!example.secrets.env
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*~
+
+# Test scratch (smoke.sh uses mktemp, but guard local runs)
+/tmp-smoke/
