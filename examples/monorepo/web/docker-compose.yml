@@ -19,6 +19,11 @@ services:
     env_file:
       - path: ./.web.env
         required: false
+      # Per-environment tier, selected by ${COMPOSE_ENV} (dev/prod). Loaded after
+      # .web.env (last-wins). required: false → a missing tier is just skipped,
+      # and the kit's Layer-2 discovery resolves the ${COMPOSE_ENV} token too.
+      - path: ./.web.${COMPOSE_ENV:-dev}.env
+        required: false
     ports:
       - "${WEB_PORT:-0}:80"
     environment:

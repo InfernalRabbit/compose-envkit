@@ -14,20 +14,25 @@ Runnable blueprint for everything below: [`examples/monorepo/`](../examples/mono
 
 ```
 monorepo/
-├── docker-compose.yml      # ROOT: include:s web/ + api/, adds the shared network
-├── .docker-env-chain       # root Layer-1 chain (.env → .${ENV}.env → .secrets.env)
-├── .env                    # root non-secret defaults (from example.env)
-├── Makefile                # include scripts/compose.mk + web-*/api-* delegation
-├── docker                  # the shim (install.sh .)         ← root operates the unified stack
-├── scripts/                # vendored engine (install.sh .)
+├── docker-compose.yml         # ROOT: include:s web/ + api/, adds the shared network
+├── docker-compose.dev.yml     # dev overlay  ┐ selected by COMPOSE_FILE's
+├── docker-compose.prod.yml    # prod overlay ┘ ${COMPOSE_ENV} token
+├── .docker-env-chain          # root Layer-1 chain (.env → .${ENV}.env → .${HOSTNAME}.env → .secrets.env)
+├── .env                       # root non-secret defaults (from example.env)
+├── .dev.env / .prod.env       # root per-env tier (from example.{dev,prod}.env); carries IS_DEV
+├── .${HOSTNAME}.env           # OPTIONAL per-machine override (not committed)
+├── Makefile                   # include scripts/compose.mk + web-*/api-* delegation
+├── docker                     # the shim (install.sh .)      ← root operates the unified stack
+├── scripts/                   # vendored engine (install.sh .)
 ├── web/
-│   ├── docker-compose.yml  # service `web`, env_file: [./.web.env], "${WEB_PORT:-0}:80"
-│   ├── .web.env            # WEB_PORT=18080  ← defined ONLY here
-│   └── Makefile            # standalone: include ../scripts/compose.mk
+│   ├── docker-compose.yml     # service `web`, env_file: [./.web.env, ./.web.${COMPOSE_ENV}.env]
+│   ├── .web.env               # WEB_PORT=18080  ← defined ONLY here (env-agnostic)
+│   ├── .web.dev.env / .web.prod.env  # per-service tier, selected by ${COMPOSE_ENV}
+│   └── Makefile               # standalone: include ../scripts/compose.mk
 └── api/
-    ├── docker-compose.yml  # service `api`, env_file: [./.api.env], "${API_PORT:-0}:80"
-    ├── .api.env            # API_PORT=19090  ← defined ONLY here
-    └── Makefile            # standalone: include ../scripts/compose.mk
+    ├── docker-compose.yml     # service `api`, env_file: [./.api.env], "${API_PORT:-0}:80"
+    ├── .api.env               # API_PORT=19090  ← defined ONLY here
+    └── Makefile               # standalone: include ../scripts/compose.mk
 ```
 
 The root `docker-compose.yml` is the *base* file. It pulls each subproject in
@@ -143,9 +148,12 @@ case ([concepts](concepts.md#the-two-layer-env-chain)) — the monorepo just spa
 directories:
 
 - **Layer 1 — the root project chain** (`.docker-env-chain`): `.env` →
-  `.${ENV}.env` → `.secrets.env`, all at the **root**. These hold values the
-  *whole stack* shares (`COMPOSE_PROJECT_NAME`, `SITE_URL`, the public URL) and
-  drive `${VAR}` interpolation in the root + included YAML.
+  `.${ENV}.env` → `.${HOSTNAME}.env` (optional per-machine) → `.secrets.env`, all
+  at the **root**. These hold values the *whole stack* shares
+  (`COMPOSE_PROJECT_NAME`, `SITE_URL`, the public URL, `IS_DEV`) and drive
+  `${VAR}` interpolation in the root + included YAML. See
+  [Per-machine overrides](#per-machine-overrides--hostnameenv) and
+  [dev / prod](#dev--prod--one-compose_env-knob) below.
 - **Layer 2 — every subproject's service `env_file:`**: `web/.web.env`,
   `api/.api.env`, auto-discovered to `COMPOSE_DEPTH`. These hold values a
   subproject owns (`WEB_PORT`, `API_PORT`) so the subproject stays runnable on
@@ -159,6 +167,102 @@ directories:
 | owned by ONE subproject, also referenced in *its* YAML | that subproject's service `env_file:` (Layer 2) | subproject stays self-contained + standalone-runnable; kit folds it in from the root |
 | a secret shared by the whole stack | root `.secrets.env` (last in Layer 1) | wins, gitignored |
 | a secret owned by ONE subproject | that subproject's own gitignored env file, via its `env_file:` | discovered as Layer-2 for that subproject only |
+
+---
+
+## Per-machine overrides — `.${HOSTNAME}.env`
+
+One dev box needs `trace` logging, another a different local path, a CI runner a
+different image — without forking the shared `.env`. The root chain supports a
+**per-machine layer** keyed on the hostname:
+
+```
+# .docker-env-chain
+.env
+.${ENV}.env
+.${HOSTNAME}.env      # ← selected by the machine hostname; beats .env / .${ENV}.env
+.secrets.env          # ← still last: secrets win over a host file
+```
+
+The engine substitutes both `${HOST}` and `${HOSTNAME}` (interchangeable) with
+the machine hostname — an exported `HOSTNAME` wins (handy for CI / tests), else
+the `hostname` command. A missing host file is silently skipped, so the chain is
+identical on a box that has no override.
+
+```sh
+$ hostname
+alice-laptop
+$ cat .alice-laptop.env
+DIRECTUS_LOG_LEVEL=trace      # just on Alice's machine
+$ ./docker env-files
+  …/.env
+  …/.alice-laptop.env         # ← folded in, after .env, before .secrets.env
+  …/.secrets.env
+```
+
+> **Slot it before `.secrets.env`, never after.** A host file is for per-machine
+> *non-secret* tweaks (log levels, local paths, feature flags). Keeping it above
+> secrets preserves the kit's invariant that `.secrets.env` wins — and a host
+> file is **not** gitignored the way `.secrets.env` is, so never put a secret in
+> one.
+
+---
+
+## dev / prod — one `COMPOSE_ENV` knob
+
+`COMPOSE_ENV` (resolved shell > root `.env` > `dev`) drives the whole dev/prod
+split from a single switch:
+
+```sh
+./docker compose up                 # dev (default)
+COMPOSE_ENV=prod ./docker compose up # prod
+```
+
+It selects **three** things at once:
+
+1. **The compose-file overlay**, via `COMPOSE_FILE` in `example.env`:
+
+   ```sh
+   COMPOSE_FILE=docker-compose.yml:docker-compose.${COMPOSE_ENV}.yml
+   ```
+
+   `docker-compose.${COMPOSE_ENV}.yml` resolves to `docker-compose.dev.yml` or
+   `docker-compose.prod.yml` — the env-specific overlay, merged last so it wins.
+
+   > **The plain `${COMPOSE_ENV}` token is safe here** — `COMPOSE_ENV` is known
+   > when the chain is read (shell > `.env`, both *before* `COMPOSE_FILE` is
+   > used), so no per-env re-pin is needed. The documented footgun (see
+   > [`concepts.md`](concepts.md) → "Gotcha 1 — `${VAR:+...}`") is only the
+   > **conditional** `${VAR:+suffix}` form, where the flag is set in a *later*
+   > file than the one building `COMPOSE_FILE`. A straight substitution is fine.
+
+2. **The root per-env tier** `.${ENV}.env` (`.dev.env` / `.prod.env`) in the
+   chain — non-secret, env-specific root config, last-wins over `.env`. This is
+   where the **`IS_DEV` convention** lives:
+
+   ```sh
+   # .dev.env            # .prod.env
+   IS_DEV=true           IS_DEV=false
+   ```
+
+   `IS_DEV` is a plain value, not engine magic — the kit derives nothing; you
+   set the pair and `COMPOSE_ENV` selects which file loads. Keep them in sync.
+
+3. **Each subproject's per-service tier** `.<svc>.${COMPOSE_ENV}.env`, declared
+   right in the subproject's `env_file:` so it works standalone too:
+
+   ```yaml
+   # web/docker-compose.yml
+   env_file:
+     - path: ./.web.env                       # env-agnostic (WEB_PORT)
+       required: false
+     - path: ./.web.${COMPOSE_ENV:-dev}.env   # per-env tier (.web.dev.env / .web.prod.env)
+       required: false
+   ```
+
+   The kit's Layer-2 parser substitutes `${COMPOSE_ENV:-dev}` in the path, so a
+   root-level `COMPOSE_ENV=prod` makes `web/.web.prod.env` resolve from the root
+   too — the same one-knob switch reaches into every subproject.
 
 ---
 

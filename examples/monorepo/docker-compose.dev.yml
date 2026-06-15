@@ -1,0 +1,11 @@
+# ============================================
+# Root DEV overlay — selected by COMPOSE_FILE's ${COMPOSE_ENV} token (example.env)
+# when COMPOSE_ENV=dev. It re-opens the included `web` service to tag the tier;
+# in a real stack this is where dev-only ports / bind-mounts / build target:
+# dev / relaxed healthchecks live. prod gets docker-compose.prod.yml instead.
+# ============================================
+
+services:
+  web:
+    environment:
+      STACK_TIER: "dev"

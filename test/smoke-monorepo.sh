@@ -66,8 +66,9 @@ fi
 
 # --- Workspace ---------------------------------------------------------------
 WORK=$(mktemp -d 2>/dev/null || mktemp -d -t composeenvkitmono)
-ISO=""   # second temp dir for the standalone-subproject test (step 7); cleaned too
-cleanup() { rm -rf "$WORK" ${ISO:+"$ISO"}; }
+ISO=""   # extra temp dirs (standalone-subproject step 7 + fallback step 14)
+FBK=""   # cleaned alongside $WORK
+cleanup() { rm -rf "$WORK" ${ISO:+"$ISO"} ${FBK:+"$FBK"}; }
 trap cleanup EXIT INT TERM
 # Resolve symlinks (macOS mktemp lives under /var -> /private/var) so paths
 # compare cleanly against the listed env-files later.
@@ -98,8 +99,10 @@ else
   bad "install.sh clobbered the blueprint's example.env"
 fi
 
-# Real root env from the template (non-secret). COMPOSE_ENV stays dev.
-cp "$WORK/example.env" "$WORK/.env"
+# Real root env from the templates (non-secret). COMPOSE_ENV stays dev.
+cp "$WORK/example.env"      "$WORK/.env"
+cp "$WORK/example.dev.env"  "$WORK/.dev.env"
+cp "$WORK/example.prod.env" "$WORK/.prod.env"
 
 for _p in \
   "$WORK/docker" \
@@ -148,6 +151,20 @@ env_files_has() {  # env_files_has <files-output> <abs-path>
   done
   IFS=$_ef_old
   return $_ef_hit
+}
+
+# 1-based position of an exact path ($2) in the env-files output ($1), or empty.
+# Used to assert chain ORDER (last-wins precedence). Collapses `/./`.
+ef_index() {  # ef_index <files-output> <abs-path>
+  printf '%s\n' "$1" | sed 's|/\./|/|g' | grep -nxF "$2" | head -1 | cut -d: -f1
+}
+
+# Extract a STRING-valued `KEY: "<value>"` from a compose-config rendering.
+config_str() {  # config_str <config-text> <KEY>
+  printf '%s\n' "$1" \
+    | grep -E "^[[:space:]]*$2:[[:space:]]*" \
+    | head -1 \
+    | sed -E "s/^[[:space:]]*$2:[[:space:]]*\"?([^\"]*)\"?[[:space:]]*\$/\1/"
 }
 
 # ============================================================================
@@ -486,6 +503,151 @@ if env_files_has "$_d4" "$WORK/a/b/c/.deep.env"; then
 else
   bad "COMPOSE_DEPTH=4 did not reach a/b/c/.deep.env:"
   printf '%s\n' "$_d4" | sed 's/^/        /'
+fi
+
+# ============================================================================
+# 12. Host overrides — .${HOSTNAME}.env resolved + slotted between .env & secrets
+# ============================================================================
+# The blueprint chain lists `.${HOSTNAME}.env` between `.${ENV}.env` and
+# `.secrets.env`. With HOSTNAME pinned, the engine must substitute the token,
+# discover the per-machine file, and keep secrets STRICTLY last.
+printf '\n[12] Host overrides: .${HOSTNAME}.env discovered + ordered before secrets\n'
+printf 'SITE_URL=host-wins.example\n' > "$WORK/.testhost.env"
+printf 'API_SECRET=shhh\n'           > "$WORK/.secrets.env"
+_hf=$( export HOSTNAME=testhost; run_shim "$WORK" env-files 2>/dev/null || true )
+if env_files_has "$_hf" "$WORK/.testhost.env"; then
+  ok "host file .testhost.env discovered via \${HOSTNAME} substitution"
+else
+  bad "host file .testhost.env NOT discovered (\${HOSTNAME} not substituted?):"
+  printf '%s\n' "$_hf" | sed 's/^/        /'
+fi
+_i_env=$(ef_index "$_hf" "$WORK/.env")
+_i_host=$(ef_index "$_hf" "$WORK/.testhost.env")
+_i_sec=$(ef_index "$_hf" "$WORK/.secrets.env")
+if [ -n "$_i_env" ] && [ -n "$_i_host" ] && [ -n "$_i_sec" ] \
+   && [ "$_i_env" -lt "$_i_host" ] && [ "$_i_host" -lt "$_i_sec" ]; then
+  ok "chain order .env($_i_env) < .testhost.env($_i_host) < .secrets.env($_i_sec) — secrets stay last"
+else
+  bad "chain order wrong (env=$_i_env host=$_i_host sec=$_i_sec; want env<host<sec):"
+  printf '%s\n' "$_hf" | sed 's/^/        /'
+fi
+# Sanity: an UNMATCHED hostname must NOT pull the file in (proves it's keyed on host).
+_hf_other=$( export HOSTNAME=otherhost; run_shim "$WORK" env-files 2>/dev/null || true )
+if env_files_has "$_hf_other" "$WORK/.testhost.env"; then
+  bad "host file .testhost.env discovered under a DIFFERENT hostname (not host-keyed)"
+else
+  ok "host file ignored under a non-matching hostname (correctly host-keyed)"
+fi
+
+# ============================================================================
+# 13. Both tokens — ${HOST} substitutes too (blueprint uses ${HOSTNAME})
+# ============================================================================
+printf '\n[13] Both tokens: ${HOST} also substitutes, not only ${HOSTNAME}\n'
+mkdir -p "$WORK/htest"
+printf 'X=1\n' > "$WORK/htest/.testhost.env"
+printf '%s\n' '.${HOST}.env' > "$WORK/htest/.docker-env-chain"   # literal token
+cp "$WORK/docker" "$WORK/htest/docker"; chmod +x "$WORK/htest/docker"
+_htf=$( export HOSTNAME=testhost; run_shim "$WORK/htest" env-files 2>/dev/null || true )
+if env_files_has "$_htf" "$WORK/htest/.testhost.env"; then
+  ok "\${HOST} token substitutes to the hostname (htest/.testhost.env discovered)"
+else
+  bad "\${HOST} token did not substitute:"
+  printf '%s\n' "$_htf" | sed 's/^/        /'
+fi
+
+# ============================================================================
+# 14. Fallback shim (NO engine reachable) also substitutes host tokens
+# ============================================================================
+# A standalone clone with just ./docker + .docker-env-chain (no scripts/) uses
+# bin/docker's inline Layer-1 fallback. It must substitute host tokens too, so
+# the fallback and the full engine behave consistently.
+printf '\n[14] Fallback shim (no scripts/) substitutes ${HOSTNAME} in the chain\n'
+FBK=$(mktemp -d 2>/dev/null || mktemp -d -t composeenvkitfbk)
+FBK=$(CDPATH= cd -- "$FBK" && pwd)
+cp "$KIT_DIR/bin/docker" "$FBK/docker"; chmod +x "$FBK/docker"
+printf '%s\n' '.${HOSTNAME}.env' > "$FBK/.docker-env-chain"   # literal token
+printf 'Z=1\n' > "$FBK/.testhost.env"
+_fbf=$( export HOSTNAME=testhost; run_shim "$FBK" env-files 2>/dev/null || true )
+if env_files_has "$_fbf" "$FBK/.testhost.env"; then
+  ok "fallback shim substitutes \${HOSTNAME} and discovers .testhost.env (no engine)"
+else
+  bad "fallback shim did not substitute \${HOSTNAME}:"
+  printf '%s\n' "$_fbf" | sed 's/^/        /'
+fi
+rm -rf "$FBK"; FBK=""
+
+# ============================================================================
+# 15. dev/prod overlay — COMPOSE_FILE ${COMPOSE_ENV} selector picks the tier
+# ============================================================================
+# example.env sets COMPOSE_FILE=docker-compose.yml:docker-compose.${COMPOSE_ENV}.yml.
+# The plain ${COMPOSE_ENV} token resolves (shell > .env) — no re-pin needed; the
+# documented footgun is only the ${VAR:+...} CONDITIONAL form. dev overlay tags
+# web STACK_TIER=dev, prod overlay tags it prod.
+printf '\n[15] dev/prod overlay: COMPOSE_FILE ${COMPOSE_ENV} selector\n'
+if [ "$HAVE_DOCKER" -eq 1 ]; then
+  _devcfg=$(run_shim "$WORK" compose config 2>"$WORK/.o.dev.err" || true)
+  _dt=$(config_str "$_devcfg" STACK_TIER)
+  if [ "$_dt" = "dev" ]; then
+    ok "dev: docker-compose.dev.yml overlay applied (STACK_TIER=dev)"
+  else
+    bad "dev: STACK_TIER='$_dt' (expected dev) — dev overlay not selected"
+    sed 's/^/        /' "$WORK/.o.dev.err" 2>/dev/null || true
+  fi
+  _prodcfg=$( export COMPOSE_ENV=prod; run_shim "$WORK" compose config 2>"$WORK/.o.prod.err" || true )
+  _pt=$(config_str "$_prodcfg" STACK_TIER)
+  if [ "$_pt" = "prod" ]; then
+    ok "prod: docker-compose.prod.yml overlay applied (STACK_TIER=prod)"
+  else
+    bad "prod: STACK_TIER='$_pt' (expected prod) — prod overlay not selected"
+    sed 's/^/        /' "$WORK/.o.prod.err" 2>/dev/null || true
+  fi
+elif [ "${SMOKE_SKIP_DOCKER:-0}" = "1" ]; then
+  info "docker unavailable + SMOKE_SKIP_DOCKER=1 — skipping overlay selection check"
+else
+  bad "docker compose unavailable — cannot check overlay selection (set SMOKE_SKIP_DOCKER=1 to skip)"
+fi
+
+# ============================================================================
+# 16. Per-service env tier — web/.web.${COMPOSE_ENV}.env switches with the env
+# ============================================================================
+printf '\n[16] Per-service env tier: web/.web.${COMPOSE_ENV}.env\n'
+_devf=$(run_shim "$WORK" env-files 2>/dev/null || true)
+if env_files_has "$_devf" "$WORK/web/.web.dev.env"; then
+  ok "dev: web/.web.dev.env discovered (per-service tier resolved via \${COMPOSE_ENV})"
+else
+  bad "dev: web/.web.dev.env NOT discovered:"
+  printf '%s\n' "$_devf" | sed 's/^/        /'
+fi
+_prodf=$( export COMPOSE_ENV=prod; run_shim "$WORK" env-files 2>/dev/null || true )
+if env_files_has "$_prodf" "$WORK/web/.web.prod.env" && ! env_files_has "$_prodf" "$WORK/web/.web.dev.env"; then
+  ok "prod: web/.web.prod.env discovered AND .web.dev.env excluded (tier switched)"
+else
+  bad "prod: per-service tier did not switch cleanly:"
+  printf '%s\n' "$_prodf" | sed 's/^/        /'
+fi
+
+# ============================================================================
+# 17. Root per-env tier — .${ENV}.env (carrying IS_DEV) selected by COMPOSE_ENV
+# ============================================================================
+printf '\n[17] Root per-env tier .${ENV}.env (IS_DEV convention)\n'
+_rdev=$(run_shim "$WORK" env-files 2>/dev/null || true)
+if env_files_has "$_rdev" "$WORK/.dev.env" && ! env_files_has "$_rdev" "$WORK/.prod.env"; then
+  ok "dev: root .dev.env selected, .prod.env excluded"
+else
+  bad "dev: root tier wrong (.dev.env present? / .prod.env absent?):"
+  printf '%s\n' "$_rdev" | sed 's/^/        /'
+fi
+_rprod=$( export COMPOSE_ENV=prod; run_shim "$WORK" env-files 2>/dev/null || true )
+if env_files_has "$_rprod" "$WORK/.prod.env" && ! env_files_has "$_rprod" "$WORK/.dev.env"; then
+  ok "prod: root .prod.env selected, .dev.env excluded"
+else
+  bad "prod: root tier wrong (.prod.env present? / .dev.env absent?):"
+  printf '%s\n' "$_rprod" | sed 's/^/        /'
+fi
+if grep -q '^IS_DEV=true$' "$WORK/.dev.env" 2>/dev/null && grep -q '^IS_DEV=false$' "$WORK/.prod.env" 2>/dev/null; then
+  ok "IS_DEV convention present: .dev.env=true / .prod.env=false"
+else
+  bad "IS_DEV convention missing from the tier files"
 fi
 
 # --- Summary -----------------------------------------------------------------

@@ -15,6 +15,14 @@
 .env
 .${ENV}.env
 
+# Per-machine override (optional): selected by the machine's hostname. Beats the
+# shared .env / .${ENV}.env so a single dev box can tweak log levels, local
+# paths, feature flags — but it is still ABOVE nothing secret: keep it BELOW
+# .secrets.env. NEVER put secrets in a host file (it is not gitignored by the
+# committed templates the way .secrets.env is). ${HOST} and ${HOSTNAME} are
+# interchangeable; both resolve to the machine hostname. Missing file ⇒ skipped.
+.${HOSTNAME}.env
+
 # Layer 2 here = SECRETS only (last wins, gitignored). Per-subproject secrets
 # live in each subproject's own gitignored env file (e.g. web/.web.secrets.env)
 # and are discovered via that subproject's env_file: — keep them out of root.

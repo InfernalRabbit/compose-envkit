@@ -6,19 +6,34 @@ to [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
-Work toward monorepo feature parity (M1 — harden the core).
+Work toward monorepo feature parity — M1 (harden the core) and M2 (dev/prod
+cohesion + per-machine overrides).
 
 ### Added
 
-- Expanded **`test/smoke-monorepo.sh`** coverage: isolated `api/` (Option A,
-  asserts sibling-blindness), self-contained subproject via `install.sh`
-  (Option B, own engine still does Layer-2), `COMPOSE_ENV=prod` assembly, and
-  characterization of the Layer-2 `COMPOSE_DEPTH` boundary, over-discovery, and
-  the `docker-compose*.yml` glob limit. Shared `env_files_has` assertion helper.
-- **`docs/monorepo.md`** — documented Layer-2 discovery limits: filename + depth
-  based (not `include:`-graph aware → over-discovery of stray
-  `docker-compose*.yml`) and glob-only matching (`compose.yaml` / custom-named
-  compose files are missed).
+- **Per-machine host overrides (M2)**: `.docker-env-chain` entries now substitute
+  `${HOST}` / `${HOSTNAME}` (the machine hostname; an exported `HOSTNAME` wins,
+  else the `hostname` command) in both `lib/compose-env.sh` and the `bin/docker`
+  inline fallback. A per-machine `.${HOSTNAME}.env` layer overrides the shared
+  chain while staying **below** `.secrets.env`.
+- **dev/prod cohesion (M2)** in `examples/monorepo/`: a `COMPOSE_FILE`
+  `:docker-compose.${COMPOSE_ENV}.yml` overlay selector with `docker-compose.dev.yml`
+  / `docker-compose.prod.yml`, per-service `.<svc>.${COMPOSE_ENV}.env` tiers, and
+  root `.{dev,prod}.env` tiers carrying the `IS_DEV` convention — all driven by a
+  single `COMPOSE_ENV` knob (no `${VAR:+...}` re-pin needed).
+- Expanded **`test/smoke-monorepo.sh`** coverage (20 → 46 assertions): isolated
+  `api/` + Option-B standalone, `COMPOSE_ENV=prod`, and the Layer-2
+  depth/over-discovery/glob-name limits (M1); host overrides + dev/prod overlay,
+  per-service tier, and root IS_DEV tier selection (M2). Shared `env_files_has`,
+  `ef_index`, and `config_str` assertion helpers.
+- **`docs/monorepo.md`** — Layer-2 discovery limits (filename+depth based, not
+  `include:`-aware → over-discovery; `docker-compose*.yml`-glob only) plus new
+  "Per-machine overrides" and "dev / prod — one COMPOSE_ENV knob" sections.
+
+### Changed
+
+- `templates/docker-env-chain` documents the optional per-machine
+  `.${HOSTNAME}.env` layer and the new `${HOST}` / `${HOSTNAME}` substitution.
 
 ## [0.1.0] — 2026-06-15
 

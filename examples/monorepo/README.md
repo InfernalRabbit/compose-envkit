@@ -12,18 +12,23 @@ For the full guide and the gotchas, see [`docs/monorepo.md`](../../docs/monorepo
 
 ```
 examples/monorepo/
-├── docker-compose.yml      # root: include:s web/ + api/, adds the shared network
-├── .docker-env-chain       # root Layer-1 chain
-├── example.env             # root non-secret defaults (cp → .env)
-├── Makefile                # include scripts/compose.mk + web-*/api-* delegation
+├── docker-compose.yml         # root: include:s web/ + api/, adds the shared network
+├── docker-compose.dev.yml     # dev overlay  ┐ selected by COMPOSE_FILE's
+├── docker-compose.prod.yml    # prod overlay ┘ ${COMPOSE_ENV} token
+├── .docker-env-chain          # root Layer-1 chain (.env → .${ENV}.env → .${HOSTNAME}.env → .secrets.env)
+├── example.env                # root non-secret defaults (cp → .env)
+├── example.dev.env            # root dev tier (cp → .dev.env);  IS_DEV=true
+├── example.prod.env           # root prod tier (cp → .prod.env); IS_DEV=false
+├── Makefile                   # include scripts/compose.mk + web-*/api-* delegation
 ├── web/
-│   ├── docker-compose.yml  # service `web`, env_file: [./.web.env], "${WEB_PORT:-0}:80"
-│   ├── .web.env            # WEB_PORT=18080  (defined ONLY here)
-│   └── Makefile            # standalone: include ../scripts/compose.mk
+│   ├── docker-compose.yml     # service `web`, env_file: [./.web.env, ./.web.${COMPOSE_ENV}.env]
+│   ├── .web.env               # WEB_PORT=18080  (defined ONLY here, env-agnostic)
+│   ├── .web.dev.env / .web.prod.env   # per-service tier (WEB_DEBUG), by ${COMPOSE_ENV}
+│   └── Makefile               # standalone: include ../scripts/compose.mk
 └── api/
-    ├── docker-compose.yml  # service `api`, env_file: [./.api.env], "${API_PORT:-0}:80"
-    ├── .api.env            # API_PORT=19090  (defined ONLY here)
-    └── Makefile            # standalone: include ../scripts/compose.mk
+    ├── docker-compose.yml     # service `api`, env_file: [./.api.env], "${API_PORT:-0}:80"
+    ├── .api.env               # API_PORT=19090  (defined ONLY here)
+    └── Makefile               # standalone: include ../scripts/compose.mk
 ```
 
 > This is a **source blueprint** — it does NOT ship a copy of `scripts/` or a
@@ -102,6 +107,30 @@ cd examples/monorepo/web && ./docker compose config
 Running from the root (A) and running isolated (B) are fully independent: each
 `./docker` sets `PROJECT_DIR` to its own dir and resolves *its own* chain and
 `env_file:` paths.
+
+---
+
+## dev / prod and per-machine overrides
+
+One `COMPOSE_ENV` knob (shell > `.env` > `dev`) drives the whole split — see
+[`docs/monorepo.md`](../../docs/monorepo.md#dev--prod--one-compose_env-knob) for
+the full story:
+
+```sh
+cp example.dev.env .dev.env && cp example.prod.env .prod.env
+
+COMPOSE_ENV=prod ./docker compose config | grep STACK_TIER
+#   STACK_TIER: prod      ← docker-compose.prod.yml overlay (COMPOSE_FILE selector)
+
+COMPOSE_ENV=prod ./docker env-files | grep -E '\.web\.|\.prod\.env'
+#   …/web/.web.prod.env   ← per-service tier switched with the env
+#   …/.prod.env           ← root tier (IS_DEV=false)
+```
+
+Per-machine tweaks (log level, local paths) go in an optional `.${HOSTNAME}.env`
+that the chain already lists — it beats the shared `.env` but stays **below**
+`.secrets.env`. Never put a secret in a host file. See
+[Per-machine overrides](../../docs/monorepo.md#per-machine-overrides--hostnameenv).
 
 ---
 

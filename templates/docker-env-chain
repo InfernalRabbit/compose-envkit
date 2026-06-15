@@ -3,7 +3,8 @@
 #
 # The compose-envkit shim (./docker, via scripts/compose-env.sh) reads this
 # file, substitutes ${ENV} (a.k.a. ${COMPOSE_ENV}; resolved as shell COMPOSE_ENV
-# > .env COMPOSE_ENV > "dev"), drops non-existent files, and feeds the result
+# > .env COMPOSE_ENV > "dev") and ${HOST} / ${HOSTNAME} (the machine hostname;
+# override by exporting HOSTNAME), drops non-existent files, and feeds the result
 # into COMPOSE_ENV_FILES. Each LATER layer OVERRIDES earlier ones (compose
 # merges last-wins). Non-existent files are silently skipped.
 #
@@ -22,6 +23,11 @@
 # Layer 1: root base + env-specific overlay
 .env
 .${ENV}.env
+
+# Per-machine override (optional): selected by the hostname. Beats the shared
+# .env / .${ENV}.env (per-dev tweaks: log level, local paths) but stays BELOW
+# secrets. NEVER put secrets here. Uncomment to use; missing file ⇒ skipped.
+#.${HOSTNAME}.env
 
 # Layer 2: SECRETS (gitignored, override everything above) — MUST be last
 .secrets.env

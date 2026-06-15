@@ -18,8 +18,9 @@
 #     refs such as `ports: "${APP_PORT:-3000}:3000"`. Native compose does NOT do
 #     this — closing that gap is the whole reason this kit exists.
 #
-# .docker-env-chain entries support ${ENV} / ${COMPOSE_ENV} substitution.
-# Non-existent files are silently skipped.
+# .docker-env-chain entries support ${ENV} / ${COMPOSE_ENV} and ${HOST} /
+# ${HOSTNAME} (machine hostname) substitution. Non-existent files are silently
+# skipped — so an optional per-machine `.${HOSTNAME}.env` just no-ops elsewhere.
 #
 # Usage (normally invoked via a shim — see bin/docker):
 #   compose-env.sh <PROJECT_DIR> compose <args>   — passthrough to docker compose
@@ -40,6 +41,11 @@ shift
 _FILE_ENV=$(grep -m1 '^COMPOSE_ENV=' "${PROJECT_DIR}/.env" 2>/dev/null | cut -d= -f2 || true)
 ENV=${COMPOSE_ENV:-${_FILE_ENV:-dev}}
 
+# Machine hostname for per-machine chain overrides (.${HOST}.env / .${HOSTNAME}.env).
+# An exported HOSTNAME wins (lets CI / tests pin it); otherwise the hostname
+# command, with fallbacks so the substitution never yields an empty token.
+_HOST=${HOSTNAME:-$(hostname 2>/dev/null || uname -n 2>/dev/null || echo unknown)}
+
 # Depth for the docker-compose*.yml search (Layer 2). Override with COMPOSE_DEPTH.
 _DEPTH=${COMPOSE_DEPTH:-3}
 
@@ -59,7 +65,7 @@ if [ -f "${PROJECT_DIR}/.docker-env-chain" ]; then
     esac
     line=$(printf '%s' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     [ -z "$line" ] && continue
-    line=$(printf '%s' "$line" | sed "s|\${ENV}|${ENV}|g; s|\${COMPOSE_ENV}|${ENV}|g")
+    line=$(printf '%s' "$line" | sed "s|\${ENV}|${ENV}|g; s|\${COMPOSE_ENV}|${ENV}|g; s|\${HOST}|${_HOST}|g; s|\${HOSTNAME}|${_HOST}|g")
     _append_if_exists "${PROJECT_DIR}/${line}"
   done < "${PROJECT_DIR}/.docker-env-chain"
 else
