@@ -137,6 +137,20 @@ all env-chain resolution and `env_file:` discovery happen relative to that — s
 running from the root and running from a subproject each resolve their own
 files correctly.
 
+### Monorepo — root orchestrates subprojects
+
+The flip side of subproject *isolation* is the **unified stack**: a root compose
+that `include:`s each subproject, run as one stack from the root. The kit's
+depth-N `env_file:` discovery (`COMPOSE_DEPTH`, default 3) reaches **across** the
+`include:`, so a `${WEB_PORT}` declared only in `web/.web.env` resolves even when
+you render the config from the root — native compose lands on the `:-0` fallback
+there. The root Makefile drives the unified stack via `$(DC)` and delegates to
+each subproject's own Makefile with `make -C <sub>`.
+
+Runnable blueprint: [`examples/monorepo/`](examples/monorepo/). Full guide
+(topology, the depth knob, env layering, delegation, gotchas):
+[`docs/monorepo.md`](docs/monorepo.md).
+
 ---
 
 ## The debug flow at a glance
@@ -196,8 +210,9 @@ compose-envkit/
 ├── templates/                       # .docker-env-chain + example.* env files
 ├── completions/                     # bash/zsh tab-completion for make targets
 ├── install.sh                       # idempotent integrator
-├── test/{smoke.sh,lint.sh}          # end-to-end + static checks
-└── docs/                            # concepts · integration · debug-flow · portability
+├── examples/monorepo/               # runnable root-include:s-subprojects blueprint
+├── test/{smoke.sh,smoke-monorepo.sh,lint.sh}   # end-to-end + monorepo + static checks
+└── docs/                            # concepts · integration · monorepo · debug-flow · portability
 ```
 
 After `install.sh`, your project gets `./docker`, `scripts/` (the flattened
@@ -212,6 +227,10 @@ engine + `.mk` files + `completions/`), `.docker-env-chain`, and `example.*`.
   `${VAR:+...}` gotcha.
 - [`docs/integration.md`](docs/integration.md) — `install.sh` flow and manual
   integration; root vs isolated-subproject setup; overlay/secret conventions.
+- [`docs/monorepo.md`](docs/monorepo.md) — root-`include:` topology (unified
+  stack from root), cross-subproject Layer-2 + the `COMPOSE_DEPTH` knob, env
+  layering, and root Makefile delegation (`make -C sub`). Blueprint in
+  [`examples/monorepo/`](examples/monorepo/).
 - [`docs/debug-flow.md`](docs/debug-flow.md) — every `env-debug` mode with
   example invocation and output.
 - [`docs/portability.md`](docs/portability.md) — POSIX guarantees, Windows via

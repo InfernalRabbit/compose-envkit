@@ -1,0 +1,25 @@
+# ============================================
+# api subproject — base compose.
+#
+# Runs two ways:
+#   Standalone:  from this dir (api/) via its own ./docker (see api/Makefile).
+#   Unified:     pulled into the root stack by the root docker-compose.yml
+#                `include:`.
+#
+# API_PORT is declared ONLY in this subproject's service env_file: (.api.env).
+# The `${API_PORT:-0}` published port resolves to the real value (19090) because
+# the kit folds .api.env into COMPOSE_ENV_FILES (Layer-2) — whether you run from
+# here OR from the root (cross-subproject Layer-2 via the include).
+# ============================================
+
+services:
+  api:
+    image: busybox
+    command: ["sh", "-c", "echo api on $${API_PORT}; sleep 3600"]
+    env_file:
+      - path: ./.api.env
+        required: false
+    ports:
+      - "${API_PORT:-0}:80"
+    environment:
+      API_PORT: "${API_PORT:-0}"

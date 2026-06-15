@@ -1,0 +1,38 @@
+# ============================================
+# Root compose — the UNIFIED stack, run from the repo root.
+#
+# It `include:`s each subproject's own compose file and adds the cross-cutting
+# bits that only make sense for the whole stack: a shared network and any
+# cross-service startup ordering. Each subproject still runs standalone from its
+# own dir (see web/ and api/); this file just composes them into one stack.
+#
+# Requires Docker Compose v2.24+ (for `env_file: required:` and `include:`).
+#
+# WHY the kit matters here: the included subproject compose files reference
+# ${WEB_PORT} / ${API_PORT}, but those vars live ONLY in the subprojects' own
+# service env_file: (web/.web.env, api/.api.env). Native `docker compose config`
+# from the root interpolates them BEFORE those env_file:s are read, so you get
+# the `:-0` fallback. The ./docker shim discovers each subproject's env_file:
+# (Layer-2, to COMPOSE_DEPTH levels — default 3, enough to reach web/ and api/)
+# and folds them into COMPOSE_ENV_FILES, so the ports resolve from the root too.
+# ============================================
+
+include:
+  - path: ./web/docker-compose.yml
+  - path: ./api/docker-compose.yml
+
+services:
+  # Cross-service wiring for services defined in the included subproject files.
+  # Attach them to the shared network and order api after web as an example of
+  # root-only orchestration (subprojects don't know about each other).
+  web:
+    networks: [shared]
+
+  api:
+    networks: [shared]
+    depends_on:
+      web: { condition: service_started }
+
+networks:
+  shared:
+    driver: bridge

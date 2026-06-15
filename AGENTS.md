@@ -154,6 +154,39 @@ The shim self-locates either way. `PROJECT_DIR` is always the shim's own
 directory, so each subproject resolves its chain and compose files against
 itself.
 
+### Monorepo — root orchestrates subprojects (root-`include:`)
+
+The above is subproject **isolation**. The other topology is a **unified stack**:
+a root `docker-compose.yml` that `include:`s each subproject's compose file (plus
+a shared network / cross-service `depends_on`), run as one stack from the root.
+
+- **Install the kit at the ROOT** (`sh install.sh <root>`). The root `./docker`
+  runs the whole stack; each subproject also runs standalone via one of the two
+  options above.
+- **Cross-subproject Layer-2:** Layer-2 discovery `find`s `docker-compose*.yml`
+  to **`COMPOSE_DEPTH`** levels (default **3**) from `PROJECT_DIR`. From the root
+  that reaches into each `<root>/<sub>/docker-compose.yml`, so a `${VAR}` (e.g.
+  `WEB_PORT`) declared only in a *subproject's* service `env_file:` resolves in
+  the unified `./docker compose config` — native `docker compose` from the root
+  lands on the `:-default` fallback. If subprojects nest deeper than one level
+  (`<root>/services/<sub>/…`), set `COMPOSE_DEPTH=N` (env var, or `export
+  COMPOSE_DEPTH := N` in the Makefile before the include). Discovered paths are
+  resolved relative to the declaring compose file's dir, so each subproject's
+  vars resolve against its own env file even when assembled from the root.
+- **Root Makefile delegation:** the root Makefile drives the unified stack with
+  `$(DC)` and forwards to each subproject's own Makefile via `$(MAKE) -C <sub>`
+  (define `SUB_X = $(MAKE) --no-print-directory -C <sub>` BEFORE
+  `include scripts/compose.mk`; then `x-build: ; $(SUB_X) build`). Subproject
+  Makefiles ride on the root engine with `include ../scripts/compose.mk`.
+- **Gotchas:** unique service/network/volume names across subprojects (`include:`
+  merges by name); prefix subproject-owned vars (`WEB_PORT`/`API_PORT`, not a
+  bare `PORT`) so Layer-2's last-wins fold doesn't alias them at the root; keep a
+  subproject's secrets in its own gitignored env file (via its `env_file:`), not
+  the root `.secrets.env`.
+
+Full guide: `docs/monorepo.md`. Runnable blueprint: `examples/monorepo/`. Proof:
+`test/smoke-monorepo.sh`.
+
 ## Usage after integration
 
 ```sh

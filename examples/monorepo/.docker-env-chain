@@ -1,0 +1,21 @@
+# ============================================
+# .docker-env-chain — the ROOT project-level env chain (Layer 1).
+#
+# These are the files that drive ${VAR} interpolation in the root + included
+# compose YAML. ${ENV} (a.k.a. ${COMPOSE_ENV}) resolves as shell COMPOSE_ENV >
+# .env COMPOSE_ENV > "dev". Missing files are silently skipped. Last wins.
+#
+# Subproject service env_file: paths (web/.web.env, api/.api.env) are NOT listed
+# here — they are AUTO-DISCOVERED (Layer 2) from the included subproject compose
+# files to COMPOSE_DEPTH levels (default 3). That cross-subproject discovery is
+# what lets a ${WEB_PORT} declared only in web/.web.env resolve from the root.
+# ============================================
+
+# Layer 1: root base + env-specific overlay
+.env
+.${ENV}.env
+
+# Layer 2 here = SECRETS only (last wins, gitignored). Per-subproject secrets
+# live in each subproject's own gitignored env file (e.g. web/.web.secrets.env)
+# and are discovered via that subproject's env_file: — keep them out of root.
+.secrets.env

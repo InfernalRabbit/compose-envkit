@@ -1,0 +1,16 @@
+# This is a BLUEPRINT, not a live deployment. Its subproject env files
+# (web/.web.env, api/.api.env) hold only port numbers — no secrets — and are
+# deliberately committed so the example stays runnable out of the box and the
+# smoke test (test/smoke-monorepo.sh) can copy + assert against them.
+#
+# The repo-root .gitignore ignores `.*.env`; re-include the blueprint's own
+# demo env files here so they are tracked. A REAL project would NOT do this —
+# real runtime env files (and any secrets) stay gitignored.
+!web/.web.env
+!api/.api.env
+
+# A real .env / .secrets.env created by trying the example (cp example.env .env)
+# must still stay ignored — re-assert that for this dir.
+.env
+.secrets.env
+*.secrets.env
