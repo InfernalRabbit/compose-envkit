@@ -266,6 +266,69 @@ It selects **three** things at once:
 
 ---
 
+## Profiles — optional services
+
+Services with a `profiles:` key run only when their profile is selected;
+unprofiled services always run. compose-envkit treats `COMPOSE_PROFILES` as pure
+**passthrough** — the shim execs `docker compose "$@"` and compose reads
+`COMPOSE_PROFILES` from the shell (or the root chain) itself. No kit state, no
+helper to learn, nothing to keep in sync.
+
+```yaml
+# docker-compose.yml
+services:
+  tools:
+    image: busybox
+    profiles: [tools]      # OFF unless the 'tools' profile is selected
+```
+
+```sh
+./docker compose up                          # web + api (unprofiled, always on)
+COMPOSE_PROFILES=tools ./docker compose up    # + tools
+# or pin a default in the root .env:  COMPOSE_PROFILES=tools
+```
+
+Document your profile catalog in `example.env` (as the blueprint does) so the
+toggles are discoverable. Multi-membership is the native compose behaviour — a
+service listing `profiles: [a, b]` runs under either, which is how you toggle a
+bundled datastore independently of its app.
+
+---
+
+## Namespacing & renaming across subprojects
+
+Layer-2 folds every discovered subproject `env_file:` into one
+`COMPOSE_ENV_FILES`, **last-wins**, and those files **are** interpolated in chain
+order — Layer 1 (root) first, then Layer 2 (subprojects). Two consequences:
+
+**You CAN rename an upstream var.** A subproject can map a root var to the name
+its binary expects, because the root value is defined earlier in the chain:
+
+```sh
+# web/.web.env (Layer 2)               root .env (Layer 1) defines SITE_URL earlier
+APP_BASE_URL=${SITE_URL:-http://localhost}
+```
+
+From the root `${SITE_URL}` resolves to the root value; the `:-default` keeps the
+subproject **standalone-safe** when nothing upstream provides it. (This is also
+why `env-debug --value` is Layer-1-only — Layer-2 values can hold live `${...}`
+refs that compose resolves but a plain shell `source` would mangle.)
+
+**But bare names alias — prefix them.** Because all subproject env files merge
+last-wins for *root* interpolation, two subprojects each defining a bare `PORT`
+cross-talk: the later-discovered one wins. Prefix subproject-owned vars
+(`WEB_PORT`, `API_PORT` — never a bare `PORT`) so they can't collide. A
+subproject run *standalone* only sees its own file, so the alias bites only from
+the root.
+
+**Ordering caveat.** A rename resolves only if the referenced var appears
+*earlier* in the merged chain. Root (Layer 1) → subproject (Layer 2) is safe;
+sibling → sibling is not (Layer-2 discovery order is filesystem-dependent) —
+route any cross-subproject value through the root chain instead of one
+subproject reaching into another.
+
+---
+
 ## Root Makefile delegation (`make -C sub`)
 
 The root Makefile drives the **unified** stack via `$(DC)` *and* delegates to

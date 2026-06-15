@@ -33,6 +33,15 @@ services:
     depends_on:
       web: { condition: service_started }
 
+  # Optional helper — OFF by default, enabled with COMPOSE_PROFILES=tools.
+  # Demonstrates compose-envkit's profiles passthrough: the ./docker shim
+  # forwards COMPOSE_PROFILES to `docker compose` unchanged (no kit state).
+  tools:
+    image: busybox
+    profiles: [tools]
+    command: ["sh", "-c", "echo tools; sleep 3600"]
+    networks: [shared]
+
 networks:
   shared:
     driver: bridge

@@ -6,10 +6,24 @@ to [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
-Work toward monorepo feature parity — M1 (harden the core) and M2 (dev/prod
-cohesion + per-machine overrides).
+Work toward monorepo feature parity — M1 (harden the core), M2 (dev/prod
+cohesion + per-machine overrides), M3 (profiles + namespacing).
 
 ### Added
+
+- **Profiles (M3)**: documented `COMPOSE_PROFILES` as pure passthrough (the shim
+  forwards it to `docker compose` unchanged — no kit state). `examples/monorepo/`
+  ships an optional `tools` service behind `profiles: [tools]`, a profile catalog
+  in `example.env`, and a "Profiles" section in `docs/monorepo.md`.
+- **Namespacing guidance (M3)**: `docs/monorepo.md` "Namespacing & renaming"
+  section — corrected from the earlier assumption that env_file values are
+  literal. They ARE interpolated in the `COMPOSE_ENV_FILES` context (chain order,
+  Layer 1 before Layer 2), so a subproject CAN rename an upstream var
+  (`NEW=${ROOT_VAR:-default}`, standalone-safe via `:-`); bare names still alias
+  last-wins (prefix them), and only earlier-in-chain refs resolve.
+- smoke-monorepo grew to 50 assertions (profiles on/off via `COMPOSE_PROFILES`;
+  namespacing rename via the chain).
+
 
 - **Per-machine host overrides (M2)**: `.docker-env-chain` entries now substitute
   `${HOST}` / `${HOSTNAME}` (the machine hostname; an exported `HOSTNAME` wins,

@@ -132,6 +132,15 @@ that the chain already lists — it beats the shared `.env` but stays **below**
 `.secrets.env`. Never put a secret in a host file. See
 [Per-machine overrides](../../docs/monorepo.md#per-machine-overrides--hostnameenv).
 
+Optional services hide behind a profile (passthrough — the shim forwards
+`COMPOSE_PROFILES` to compose unchanged). The blueprint ships a `tools` service
+off by default:
+
+```sh
+./docker compose config --services                       # web, api
+COMPOSE_PROFILES=tools ./docker compose config --services # web, api, tools
+```
+
 ---
 
 ## Verify

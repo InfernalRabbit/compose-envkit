@@ -36,11 +36,21 @@
 #      to docker-compose.yml IS discovered (proves the glob is the cause).
 #  11. COMPOSE_DEPTH boundary — a depth-4 compose is missed at the default 3 and
 #      found with COMPOSE_DEPTH=4 (the depth knob works).
+#  12. Host overrides — .${HOSTNAME}.env resolved + slotted before secrets, and
+#      ignored under a non-matching hostname.
+#  13. Both tokens — ${HOST} substitutes too (blueprint chain uses ${HOSTNAME}).
+#  14. Fallback shim (no scripts/) substitutes host tokens too.
+#  15. dev/prod overlay — COMPOSE_FILE ${COMPOSE_ENV} selector picks dev/prod.
+#  16. Per-service env tier — web/.web.${COMPOSE_ENV}.env switches with the env.
+#  17. Root per-env tier — .${ENV}.env (carrying IS_DEV) selected by COMPOSE_ENV.
+#  18. Profiles — a profiled service is OFF by default, ON via COMPOSE_PROFILES.
+#  19. Namespacing — a subproject env_file renames an upstream var via the chain.
 #
-# Exit non-zero on ANY failure. Steps 2/3/5/6/7/8 need `docker compose` for their
-# config-value checks; if it is absent those FAIL loudly — set SMOKE_SKIP_DOCKER=1
+# Exit non-zero on ANY failure. The config-value checks (2/3/5/6/7/8/15/18/19)
+# need `docker compose`; if it is absent those FAIL loudly — set SMOKE_SKIP_DOCKER=1
 # to downgrade the docker-dependent checks to skips. The env-files discovery
-# checks (4, and the discovery half of 6/7/9/10/11) run with NO docker.
+# checks (4, 12, 13, 14, 16, 17, and the discovery half of 6/7/9/10/11) run with
+# NO docker.
 # ============================================================================
 
 set -eu
@@ -648,6 +658,78 @@ if grep -q '^IS_DEV=true$' "$WORK/.dev.env" 2>/dev/null && grep -q '^IS_DEV=fals
   ok "IS_DEV convention present: .dev.env=true / .prod.env=false"
 else
   bad "IS_DEV convention missing from the tier files"
+fi
+
+# ============================================================================
+# 18. Profiles — a profiled service is OFF by default, ON via COMPOSE_PROFILES
+# ============================================================================
+# compose-envkit treats COMPOSE_PROFILES as pure passthrough: the shim execs
+# `docker compose "$@"` and compose reads COMPOSE_PROFILES from the shell/.env
+# natively. The blueprint ships an optional `tools` service behind profiles:[tools].
+printf '\n[18] Profiles: profiled service OFF by default, ON via COMPOSE_PROFILES\n'
+if [ "$HAVE_DOCKER" -eq 1 ]; then
+  _svcs=$(run_shim "$WORK" compose config --services 2>/dev/null || true)
+  if printf '%s\n' "$_svcs" | grep -qx 'tools'; then
+    bad "profiled 'tools' is ON by default (should be gated):"
+    printf '%s\n' "$_svcs" | sed 's/^/        /'
+  else
+    ok "profiled 'tools' is OFF by default"
+  fi
+  # web/api (no profiles:) must still be active by default.
+  if printf '%s\n' "$_svcs" | grep -qx 'web' && printf '%s\n' "$_svcs" | grep -qx 'api'; then
+    ok "unprofiled services web + api are active by default"
+  else
+    bad "web/api not active by default:"; printf '%s\n' "$_svcs" | sed 's/^/        /'
+  fi
+  _svcs_p=$( export COMPOSE_PROFILES=tools; run_shim "$WORK" compose config --services 2>/dev/null || true )
+  if printf '%s\n' "$_svcs_p" | grep -qx 'tools'; then
+    ok "COMPOSE_PROFILES=tools enables 'tools' (passthrough through the shim)"
+  else
+    bad "COMPOSE_PROFILES=tools did NOT enable 'tools':"
+    printf '%s\n' "$_svcs_p" | sed 's/^/        /'
+  fi
+elif [ "${SMOKE_SKIP_DOCKER:-0}" = "1" ]; then
+  info "docker unavailable + SMOKE_SKIP_DOCKER=1 — skipping profiles check"
+else
+  bad "docker compose unavailable — cannot check profiles (set SMOKE_SKIP_DOCKER=1 to skip)"
+fi
+
+# ============================================================================
+# 19. Namespacing — a subproject env_file CAN rename an upstream var via the chain
+# ============================================================================
+# env_file values ARE interpolated in the COMPOSE_ENV_FILES context, referencing
+# vars defined EARLIER in the chain. Since the engine puts Layer 1 (root) before
+# Layer 2 (subproject), a subproject can map a root var to the name its binary
+# wants: NEWNAME=${ROOTVAR:-default} (the :- keeps it standalone-safe).
+printf '\n[19] Namespacing: subproject env_file renames an upstream var via the chain\n'
+mkdir -p "$WORK/nstest"
+printf 'SITE_URL=renamed-ok\n'                  > "$WORK/nstest/.env"
+printf '%s\n' '.env'                            > "$WORK/nstest/.docker-env-chain"
+printf '%s\n' 'NSVC_SITE=${SITE_URL:-fallback}' > "$WORK/nstest/.nsvc.env"
+cat > "$WORK/nstest/docker-compose.yml" <<'YAML'
+services:
+  nsvc:
+    image: busybox
+    env_file:
+      - path: ./.nsvc.env
+        required: false
+    environment:
+      NSVC_SITE: "${NSVC_SITE:-MISSING}"
+YAML
+cp "$WORK/docker" "$WORK/nstest/docker"; chmod +x "$WORK/nstest/docker"
+if [ "$HAVE_DOCKER" -eq 1 ]; then
+  _nscfg=$(run_shim "$WORK/nstest" compose config 2>/dev/null || true)
+  _ns=$(config_str "$_nscfg" NSVC_SITE)
+  if [ "$_ns" = "renamed-ok" ]; then
+    ok "subproject .nsvc.env renamed SITE_URL→NSVC_SITE via the chain (Layer 1 before Layer 2)"
+  else
+    bad "rename via chain failed: NSVC_SITE='$_ns' (expected renamed-ok)"
+    printf '%s\n' "$_nscfg" | grep -E 'NSVC_SITE|SITE_URL' | sed 's/^/        /'
+  fi
+elif [ "${SMOKE_SKIP_DOCKER:-0}" = "1" ]; then
+  info "docker unavailable + SMOKE_SKIP_DOCKER=1 — skipping namespacing rename check"
+else
+  bad "docker compose unavailable — cannot check namespacing rename (set SMOKE_SKIP_DOCKER=1 to skip)"
 fi
 
 # --- Summary -----------------------------------------------------------------
