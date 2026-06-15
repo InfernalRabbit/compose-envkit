@@ -29,10 +29,14 @@ monorepo/
 │   ├── .web.env               # WEB_PORT=18080  ← defined ONLY here (env-agnostic)
 │   ├── .web.dev.env / .web.prod.env  # per-service tier, selected by ${COMPOSE_ENV}
 │   └── Makefile               # standalone: include ../scripts/compose.mk
-└── api/
-    ├── docker-compose.yml     # service `api`, env_file: [./.api.env], "${API_PORT:-0}:80"
-    ├── .api.env               # API_PORT=19090  ← defined ONLY here
-    └── Makefile               # standalone: include ../scripts/compose.mk
+├── api/
+│   ├── docker-compose.yml     # service `api`, env_file: [./.api.env], "${API_PORT:-0}:80"
+│   ├── .api.env               # API_PORT=19090  ← defined ONLY here
+│   └── Makefile               # standalone: include ../scripts/compose.mk
+└── services/
+    └── reports/               # nested one level deeper (the legacy services/<svc>/ shape)
+        ├── docker-compose.yml # service `reports`, env_file: [./.reports.env]
+        └── .reports.env       # REPORTS_PORT=15151  ← reached from root at depth 3
 ```
 
 The root `docker-compose.yml` is the *base* file. It pulls each subproject in
@@ -381,6 +385,30 @@ for the one-time "set this repo up on a fresh machine" step. Out of the box it:
 Deliberately POSIX `sh` and side-effect-light: **no `sudo`, no `chmod 777`, no
 secrets written anywhere** — exactly the legacy compile-step pitfalls the kit
 exists to avoid. Your project's `init.sh` is yours; the kit never overwrites it.
+
+---
+
+## Submodules & the `services/<svc>/` layout
+
+A subproject can sit one (or more) levels deeper — the legacy `services/<svc>/`
+shape — and/or be a **git submodule**. Neither is special to the kit:
+
+- **Deeper nesting.** Discovery is a depth-bounded `find`, so
+  `services/reports/docker-compose.yml` (find-depth 3) is reached at the default
+  `COMPOSE_DEPTH=3`. The blueprint ships exactly this (`services/reports/`).
+  Nest deeper — `services/<group>/<svc>/` — and bump `COMPOSE_DEPTH` to match
+  (see [the depth knob](#how-the-discovery-reaches-across-the-include--compose_depth)).
+  Include it from the root the same way: `include: [{ path: ./services/reports/docker-compose.yml }]`.
+- **Submodules.** A subproject that is its own git repo (a submodule) is just a
+  directory to the kit — discovery is `find`-by-glob, blind to `.git`. It runs
+  unified (folded in from the root) or standalone (its own `./docker`, Option A
+  or B) exactly like an in-tree subproject. Keep the subproject's `env_file:`
+  paths relative to itself (the compose spec's rule, which the kit honors) so the
+  same compose file works from the root and from inside the submodule.
+
+> Migrating the legacy monorepo's `services/<svc>/` submodules is therefore a
+> drop-in: point the root `include:` at each, ensure `COMPOSE_DEPTH` covers the
+> deepest, and the per-subproject `env_file:` values resolve from the root.
 
 ---
 

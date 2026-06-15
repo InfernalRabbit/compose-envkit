@@ -7,9 +7,20 @@ to [Semantic Versioning](https://semver.org/) and the
 ## [Unreleased]
 
 Work toward monorepo feature parity — M1 (harden the core), M2 (dev/prod
-cohesion + per-machine overrides), M3 (profiles + namespacing), M4 (bootstrap).
+cohesion + per-machine overrides), M3 (profiles + namespacing), M4 (bootstrap),
+M5 (deep `services/<svc>/` nesting + submodules).
 
 ### Added
+
+- **Deep nesting + submodules (M5)**: the blueprint ships a `services/reports/`
+  subproject nested one level deeper (the legacy `services/<svc>/` shape),
+  included from the root — proving cross-subproject Layer-2 reaches it at the
+  default `COMPOSE_DEPTH=3`. New `docs/monorepo.md` "Submodules & the
+  `services/<svc>/` layout" section (a subproject can be a git submodule —
+  discovery is `find`-by-glob, blind to `.git`). smoke-monorepo grew to 58
+  (deep `services/reports` resolves `REPORTS_PORT` from the root; a `.git`
+  gitlink-shaped subproject is still discovered).
+
 
 - **Bootstrap `init.sh` (M4)**: `install.sh` now generates a customizable,
   executable `init.sh` (never clobbered) — a project-agnostic one-time bootstrap

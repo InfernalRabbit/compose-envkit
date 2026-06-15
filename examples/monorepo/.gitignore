@@ -10,6 +10,7 @@
 !web/.web.dev.env
 !web/.web.prod.env
 !api/.api.env
+!services/reports/.reports.env
 
 # A real .env / .secrets.env created by trying the example (cp example.env .env)
 # must still stay ignored — re-assert that for this dir.

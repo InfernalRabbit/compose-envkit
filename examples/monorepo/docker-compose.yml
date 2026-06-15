@@ -20,6 +20,7 @@
 include:
   - path: ./web/docker-compose.yml
   - path: ./api/docker-compose.yml
+  - path: ./services/reports/docker-compose.yml   # nested one level deeper (services/<svc>/)
 
 services:
   # Cross-service wiring for services defined in the included subproject files.
@@ -32,6 +33,11 @@ services:
     networks: [shared]
     depends_on:
       web: { condition: service_started }
+
+  # A deeper subproject (services/reports/) — proves cross-subproject Layer-2
+  # reaches services/<svc>/ at the default depth. Joins the shared network too.
+  reports:
+    networks: [shared]
 
   # Optional helper — OFF by default, enabled with COMPOSE_PROFILES=tools.
   # Demonstrates compose-envkit's profiles passthrough: the ./docker shim

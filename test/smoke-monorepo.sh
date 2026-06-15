@@ -47,6 +47,9 @@
 #  19. Namespacing — a subproject env_file renames an upstream var via the chain.
 #  20. Bootstrap — install generates init.sh; it seeds .X from example.X
 #      (no-clobber), fans out to subproject init.sh, and is idempotent.
+#  21. Deep nesting — a services/<svc>/ subproject resolves from the root at the
+#      default COMPOSE_DEPTH=3 (the legacy services/ shape).
+#  22. Submodule shape — a subproject with a .git gitlink is still discovered.
 #
 # Exit non-zero on ANY failure. The config-value checks (2/3/5/6/7/8/15/18/19)
 # need `docker compose`; if it is absent those FAIL loudly — set SMOKE_SKIP_DOCKER=1
@@ -782,6 +785,59 @@ else
   bad "init.sh re-run failed (not idempotent)"
 fi
 rm -rf "$INIT"; INIT=""
+
+# ============================================================================
+# 21. Deep nesting — a services/<svc>/ subproject resolves from the root (depth 3)
+# ============================================================================
+# The legacy monorepo nests services as services/<name>/. The blueprint ships one
+# (services/reports/) included by the root; cross-subproject Layer-2 reaches its
+# compose file at find-depth 3 (the default COMPOSE_DEPTH).
+printf '\n[21] Deep nesting: services/<svc>/ resolves from the root at depth 3\n'
+_deepf=$(run_shim "$WORK" env-files 2>/dev/null || true)
+if env_files_has "$_deepf" "$WORK/services/reports/.reports.env"; then
+  ok "Layer-2 discovers services/reports/.reports.env from root (default COMPOSE_DEPTH=3)"
+else
+  bad "services/reports/.reports.env NOT discovered from root:"
+  printf '%s\n' "$_deepf" | sed 's/^/        /'
+fi
+if [ "$HAVE_DOCKER" -eq 1 ]; then
+  _deepcfg=$(run_shim "$WORK" compose config 2>/dev/null || true)
+  _rp=$(config_value "$_deepcfg" REPORTS_PORT)
+  if [ "$_rp" = "15151" ]; then
+    ok "cross-subproject Layer-2 resolves REPORTS_PORT=15151 for nested services/reports"
+  else
+    bad "REPORTS_PORT='$_rp' (expected 15151) — deep subproject not resolved"
+    printf '%s\n' "$_deepcfg" | grep -E 'REPORTS_PORT|published' | sed 's/^/        /'
+  fi
+elif [ "${SMOKE_SKIP_DOCKER:-0}" = "1" ]; then
+  info "docker unavailable + SMOKE_SKIP_DOCKER=1 — skipping deep config check"
+else
+  bad "docker compose unavailable — cannot check deep subproject (set SMOKE_SKIP_DOCKER=1 to skip)"
+fi
+
+# ============================================================================
+# 22. Submodule shape — a subproject with a .git gitlink is still discovered
+# ============================================================================
+# A subproject can be a git submodule (its own repo). To the kit it is just a
+# subdir: discovery is find-by-glob, blind to .git. Prove a .git gitlink file
+# doesn't change anything.
+printf '\n[22] Submodule shape: a subproject with a .git gitlink is discovered\n'
+mkdir -p "$WORK/vendored"
+printf 'gitdir: /elsewhere/.git/modules/vendored\n' > "$WORK/vendored/.git"  # submodule gitlink
+printf 'VEND_PORT=16161\n' > "$WORK/vendored/.vend.env"
+cat > "$WORK/vendored/docker-compose.yml" <<'YAML'
+services:
+  vend:
+    image: busybox
+    env_file: .vend.env
+YAML
+_subm=$(run_shim "$WORK" env-files 2>/dev/null || true)
+if env_files_has "$_subm" "$WORK/vendored/.vend.env"; then
+  ok "subproject with a .git gitlink is discovered like any subdir (submodules just work)"
+else
+  bad "submodule-shaped subproject not discovered:"
+  printf '%s\n' "$_subm" | sed 's/^/        /'
+fi
 
 # --- Summary -----------------------------------------------------------------
 printf '\n== summary ==\n'

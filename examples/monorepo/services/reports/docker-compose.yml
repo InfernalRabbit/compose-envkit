@@ -1,0 +1,24 @@
+# ============================================
+# reports subproject — base compose, nested under services/ (one level deeper
+# than web/ + api/). This mirrors the legacy monorepo's services/<svc>/ layout.
+#
+# Cross-subproject Layer-2 still reaches it from the root: this file sits at
+# find-depth 3 (services=1, reports=2, file=3) — exactly the default
+# COMPOSE_DEPTH. A subproject nested deeper needs COMPOSE_DEPTH bumped (see
+# docs/monorepo.md → "the depth knob").
+#
+# REPORTS_PORT lives ONLY in this subproject's env_file (.reports.env); the kit
+# folds it in so ${REPORTS_PORT} resolves from the root too.
+# ============================================
+
+services:
+  reports:
+    image: busybox
+    command: ["sh", "-c", "echo reports on $${REPORTS_PORT}; sleep 3600"]
+    env_file:
+      - path: ./.reports.env
+        required: false
+    ports:
+      - "${REPORTS_PORT:-0}:80"
+    environment:
+      REPORTS_PORT: "${REPORTS_PORT:-0}"

@@ -25,10 +25,13 @@ examples/monorepo/
 │   ├── .web.env               # WEB_PORT=18080  (defined ONLY here, env-agnostic)
 │   ├── .web.dev.env / .web.prod.env   # per-service tier (WEB_DEBUG), by ${COMPOSE_ENV}
 │   └── Makefile               # standalone: include ../scripts/compose.mk
-└── api/
-    ├── docker-compose.yml     # service `api`, env_file: [./.api.env], "${API_PORT:-0}:80"
-    ├── .api.env               # API_PORT=19090  (defined ONLY here)
-    └── Makefile               # standalone: include ../scripts/compose.mk
+├── api/
+│   ├── docker-compose.yml     # service `api`, env_file: [./.api.env], "${API_PORT:-0}:80"
+│   ├── .api.env               # API_PORT=19090  (defined ONLY here)
+│   └── Makefile               # standalone: include ../scripts/compose.mk
+└── services/reports/          # nested deeper (legacy services/<svc>/ shape)
+    ├── docker-compose.yml     # service `reports`, env_file: [./.reports.env]
+    └── .reports.env           # REPORTS_PORT=15151  (reached from root at depth 3)
 ```
 
 > This is a **source blueprint** — it does NOT ship a copy of `scripts/` or a
