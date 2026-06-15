@@ -1,0 +1,16 @@
+# Minimal, deterministic golangci-lint config so CI lint is reproducible
+# (without a committed config the run is non-reproducible and may silently
+# never run). Mirrors the spec DoD: vet + gofmt + golangci-lint clean.
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+formatters:
+  enable:
+    - gofmt

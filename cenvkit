@@ -1,0 +1,7 @@
+#!/bin/sh
+# Vendored-mode launcher: runs cenvkit from source via the Go toolchain.
+# For lower latency, `go build -o .cenvkit.bin ./cmd/cenvkit` and run that
+# (.cenvkit.bin is gitignored). No committed binaries, no network.
+set -eu
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec go run "$dir/cmd/cenvkit" "$@"

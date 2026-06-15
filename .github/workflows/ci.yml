@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26"
+
+jobs:
+  lint:
+    name: vet / gofmt / golangci-lint / seam
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt (fail if any file is unformatted)
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: compose-go seam check (only internal/engine may import compose-go)
+        run: |
+          MOD=$(go list -m)
+          # Strip the engine package's OWN line first (anchored ImportPath +
+          # trailing space), THEN look for any remaining compose-go import. An
+          # unanchored `grep -v .../internal/engine` would wrongly exclude any
+          # package that merely IMPORTS internal/engine (e.g. cmd) and thus miss
+          # a real leak there.
+          leaks=$(go list -f '{{.ImportPath}} {{join .Imports " "}}' ./... \
+            | grep -v "^${MOD}/internal/engine " \
+            | grep 'compose-spec/compose-go' || true)
+          if [ -n "$leaks" ]; then
+            echo "compose-go leaked outside internal/engine:"
+            echo "$leaks"
+            exit 1
+          fi
+          echo "seam OK"
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  goreleaser-check:
+    name: goreleaser check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+
+  test:
+    name: unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: go build
+        run: go build ./...
+      - name: go test
+        run: go test ./...
+
+  acceptance-docker:
+    name: acceptance (docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      # ubuntu-latest GitHub runners ship Docker + the compose plugin.
+      - name: docker compose version
+        run: docker compose version
+      - name: acceptance suite (docker)
+        run: go test ./test/... -v
+
+  acceptance-no-docker:
+    name: acceptance (no docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: acceptance suite (docker-dependent assertions skipped)
+        env:
+          SMOKE_SKIP_DOCKER: "1"
+        run: go test ./test/... -v

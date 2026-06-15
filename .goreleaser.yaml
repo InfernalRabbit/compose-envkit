@@ -1,0 +1,56 @@
+# GoReleaser config for cenvkit — per-OS binaries built from ./cmd/cenvkit.
+# No committed binaries; releases are produced on a Git tag in CI.
+# Validate locally with `goreleaser check`.
+version: 2
+
+project_name: cenvkit
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: cenvkit
+    main: ./cmd/cenvkit
+    binary: cenvkit
+    env:
+      - CGO_ENABLED=0
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: cenvkit
+    formats: [tar.gz]
+    # Use zip for Windows archives.
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
