@@ -231,6 +231,26 @@ on its own never sees `api/`'s env, and vice-versa.
   the `:-0` fallback from the root but resolves correctly when run standalone →
   the root search isn't reaching that compose file; raise the depth.
 
+- **Discovery is filename + depth based, not `include:`-graph aware
+  (over-discovery).** Layer-2 finds env files by globbing `docker-compose*.yml`
+  within `COMPOSE_DEPTH` — it does **not** read your `include:` list or
+  `COMPOSE_FILE`. So a stray compose that matches the glob (a CI variant
+  `docker-compose.ci.yml`, a vendored `docker-compose-yandex.yml`, an old
+  `docker-compose.bak.yml`) has its `env_file:` folded into the chain **even
+  though you never `include:` it** — its vars can then win a last-wins collision
+  for root interpolation. Symptom: an unexpected var shows up in
+  `./docker env-files`. Fix: don't leave stray `docker-compose*.yml` files inside
+  the tree (rename them so they don't match, e.g. `docker-compose.yml.bak`), or
+  narrow `COMPOSE_DEPTH` so the search doesn't reach them.
+
+- **Only `docker-compose*.yml` is discovered.** A subproject compose named
+  `compose.yaml` / `compose.yml` (Compose's *other* default names) or any custom
+  filename is **invisible** to Layer-2 — its `env_file:` will not resolve from
+  the root, even well within `COMPOSE_DEPTH`. Symptom: a subproject port shows
+  the `:-0` fallback from the root, yet the compose file plainly exists at a
+  shallow depth. Fix: name subproject compose files `docker-compose*.yml` (or add
+  a `docker-compose.yml` symlink to the real file).
+
 - **Service-name collisions across subprojects.** `include:` merges services by
   name into one project. Two subprojects each defining a service called `web`
   collide (compose deep-merges them — usually not what you want). Keep service
@@ -267,4 +287,7 @@ on its own never sees `api/`'s env, and vice-versa.
   `env_file:`→interpolation gap (single-project foundation).
 - [`docs/integration.md`](integration.md#root-vs-isolated-subproject-setup) —
   the two subproject options (ride-on-parent vs self-contained) in full.
-- `test/smoke-monorepo.sh` — proves cross-subproject Layer-2 end-to-end.
+- `test/smoke-monorepo.sh` — proves this end-to-end: cross-subproject Layer-2,
+  both isolation options (A ride-on-parent / B self-contained), `COMPOSE_ENV`
+  switching, the `COMPOSE_DEPTH` boundary, and the over-discovery / glob-naming
+  limits documented above.

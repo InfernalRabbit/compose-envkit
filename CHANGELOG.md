@@ -4,6 +4,22 @@ All notable changes to compose-envkit are documented here. This project adheres
 to [Semantic Versioning](https://semver.org/) and the
 [Keep a Changelog](https://keepachangelog.com/) format.
 
+## [Unreleased]
+
+Work toward monorepo feature parity (M1 — harden the core).
+
+### Added
+
+- Expanded **`test/smoke-monorepo.sh`** coverage: isolated `api/` (Option A,
+  asserts sibling-blindness), self-contained subproject via `install.sh`
+  (Option B, own engine still does Layer-2), `COMPOSE_ENV=prod` assembly, and
+  characterization of the Layer-2 `COMPOSE_DEPTH` boundary, over-discovery, and
+  the `docker-compose*.yml` glob limit. Shared `env_files_has` assertion helper.
+- **`docs/monorepo.md`** — documented Layer-2 discovery limits: filename + depth
+  based (not `include:`-graph aware → over-discovery of stray
+  `docker-compose*.yml`) and glob-only matching (`compose.yaml` / custom-named
+  compose files are missed).
+
 ## [0.1.0] — 2026-06-15
 
 Initial release. Extracted and generalized from the SmartDriver infra tooling
