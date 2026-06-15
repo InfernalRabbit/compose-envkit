@@ -45,9 +45,10 @@ done
 # data dirs, …) without the kit needing to know any service names.
 for _d in */; do
   [ -d "$_d" ] || continue             # no subdirs => glob stayed literal
-  if [ -f "$_d/init.sh" ] && [ -x "$_d/init.sh" ]; then
+  [ -h "${_d%/}" ] && continue         # skip symlinked dirs (avoid cycles)
+  if [ -f "$_d/init.sh" ]; then        # run via `sh` — no +x dependency (Windows)
     say "init: -> ${_d}init.sh"
-    ( cd "$_d" && ./init.sh )
+    ( cd "$_d" && sh ./init.sh )
   fi
 done
 

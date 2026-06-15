@@ -271,11 +271,13 @@ if [ -n "$_files" ]; then
     bad "env-files did NOT include api/.api.env:"
     printf '%s\n' "$_files" | sed 's/^/        /'
   fi
-  # Layer-1 root .env must be present too.
+  # Layer-1 root .env must be present — the blueprint chain lists it always, so
+  # its absence is a regression (Layer-1 lost), not an acceptable omission.
   if printf '%s\n' "$_files" | grep -q '/\.env$'; then
     ok "env-files includes the Layer-1 root .env"
   else
-    info "env-files did not list the root .env (ok if the chain omits it)"
+    bad "env-files did NOT list the root .env (Layer-1 lost):"
+    printf '%s\n' "$_files" | sed 's/^/        /'
   fi
 else
   bad "env-files produced no output:"
@@ -660,10 +662,20 @@ else
   bad "prod: root tier wrong (.prod.env present? / .dev.env absent?):"
   printf '%s\n' "$_rprod" | sed 's/^/        /'
 fi
-if grep -q '^IS_DEV=true$' "$WORK/.dev.env" 2>/dev/null && grep -q '^IS_DEV=false$' "$WORK/.prod.env" 2>/dev/null; then
-  ok "IS_DEV convention present: .dev.env=true / .prod.env=false"
+# Engine-resolution (not just the fixture file): the web service consumes
+# ${IS_DEV}, so the rendered config shows the value the selected tier carries.
+if [ "$HAVE_DOCKER" -eq 1 ]; then
+  _iddev=$(config_str "$(run_shim "$WORK" compose config 2>/dev/null || true)" IS_DEV)
+  _idprod=$(config_str "$( export COMPOSE_ENV=prod; run_shim "$WORK" compose config 2>/dev/null || true )" IS_DEV)
+  if [ "$_iddev" = "true" ] && [ "$_idprod" = "false" ]; then
+    ok "engine resolves IS_DEV=true (dev) / false (prod) into the rendered config"
+  else
+    bad "IS_DEV not resolved by engine (dev='$_iddev' prod='$_idprod'; expected true/false)"
+  fi
+elif [ "${SMOKE_SKIP_DOCKER:-0}" = "1" ]; then
+  info "docker unavailable + SMOKE_SKIP_DOCKER=1 — skipping IS_DEV engine-resolution check"
 else
-  bad "IS_DEV convention missing from the tier files"
+  bad "docker compose unavailable — cannot verify IS_DEV resolution (set SMOKE_SKIP_DOCKER=1 to skip)"
 fi
 
 # ============================================================================
@@ -837,6 +849,46 @@ if env_files_has "$_subm" "$WORK/vendored/.vend.env"; then
 else
   bad "submodule-shaped subproject not discovered:"
   printf '%s\n' "$_subm" | sed 's/^/        /'
+fi
+# Also a real .git DIRECTORY (a full nested repo) — must still be discovered;
+# guards against a future `find ... -prune` of .git.
+mkdir -p "$WORK/vendored2/.git"
+printf 'VEND2_PORT=16262\n' > "$WORK/vendored2/.vend2.env"
+cat > "$WORK/vendored2/docker-compose.yml" <<'YAML'
+services:
+  vend2:
+    image: busybox
+    env_file: .vend2.env
+YAML
+_subm2=$(run_shim "$WORK" env-files 2>/dev/null || true)
+if env_files_has "$_subm2" "$WORK/vendored2/.vend2.env"; then
+  ok "subproject with a real .git DIRECTORY is still discovered (find not pruned)"
+else
+  bad "nested-repo-shaped subproject not discovered:"
+  printf '%s\n' "$_subm2" | sed 's/^/        /'
+fi
+
+# ============================================================================
+# 23. Host token is sanitized — a sed-special HOSTNAME must not break the engine
+# ============================================================================
+# ${HOST}/${HOSTNAME} is substituted into a sed program; an unescaped delimiter
+# (|) or & in the hostname would crash sed (and, under set -eu, abort ./docker).
+# The engine sanitizes the resolved host to [A-Za-z0-9._-] first.
+printf '\n[23] Host token sanitized: a sed-special HOSTNAME does not break the engine\n'
+printf 'SANE=1\n' > "$WORK/.evlhost.env"          # sanitized 'ev|l&host' -> 'evlhost'
+_san_rc=0
+_san_out=$( export HOSTNAME='ev|l&host'; run_shim "$WORK" env-files 2>"$WORK/.san.err" ) || _san_rc=$?
+if [ "$_san_rc" -eq 0 ] && [ -n "$_san_out" ]; then
+  ok "engine survives a HOSTNAME with sed-special chars (exit 0, output produced)"
+else
+  bad "engine broke on a special-char HOSTNAME (rc=$_san_rc):"
+  sed 's/^/        /' "$WORK/.san.err" 2>/dev/null || true
+fi
+if env_files_has "$_san_out" "$WORK/.evlhost.env"; then
+  ok "special chars stripped → .evlhost.env resolved (host sanitized to [A-Za-z0-9._-])"
+else
+  bad "sanitized host file .evlhost.env not resolved:"
+  printf '%s\n' "$_san_out" | sed 's/^/        /'
 fi
 
 # --- Summary -----------------------------------------------------------------

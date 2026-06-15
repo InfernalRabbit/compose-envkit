@@ -406,9 +406,39 @@ shape — and/or be a **git submodule**. Neither is special to the kit:
   paths relative to itself (the compose spec's rule, which the kit honors) so the
   same compose file works from the root and from inside the submodule.
 
-> Migrating the legacy monorepo's `services/<svc>/` submodules is therefore a
-> drop-in: point the root `include:` at each, ensure `COMPOSE_DEPTH` covers the
-> deepest, and the per-subproject `env_file:` values resolve from the root.
+> Migrating the legacy `services/<svc>/` submodules: point the root `include:`
+> at each and ensure `COMPOSE_DEPTH` covers the deepest. The per-subproject
+> `env_file:` values then resolve from the root — *provided each uses a plain
+> relative path* (see [Migrating an existing monorepo](#migrating-an-existing-monorepo)).
+
+---
+
+## Migrating an existing monorepo
+
+The kit reaches parity with the legacy env *features*, but a real legacy tree is
+not always drop-in. Before a unified `./docker compose up` works, expect this
+one-time, mechanical rework — validate the result with `./docker compose config`:
+
+- **Relative `env_file:` paths.** The Layer-2 parser substitutes only
+  `${COMPOSE_ENV}` in `env_file:` paths, so a legacy
+  `env_file: ${SVC_DIR:-.}/.svc.env` pointer is emitted literally and never
+  found. Rewrite each to a plain relative path (`./.svc.env`) — the compose-spec
+  rule the kit relies on. (Run-from-anywhere pointers are replaced by the
+  self-locating `./docker` + depth-bounded discovery.)
+- **`include:` instead of a `COMPOSE_FILE` fragment list.** Replace a
+  comma/colon-assembled `COMPOSE_FILE=${dc1},${dc2},…` with `include:` of each
+  subproject compose, and move cross-cutting overlays (shared networks,
+  `extra_hosts`, `depends_on`, static IPs) into the root `services:` block.
+  Reserve `COMPOSE_FILE` for the `:docker-compose.${COMPOSE_ENV}.yml` selector.
+- **Rename stray `docker-compose*.yml`.** Build-only variants (e.g.
+  `docker-compose-yandex.yml`) match the discovery glob and would over-discover
+  their `env_file:`. Rename them out of the glob (`yandex.compose.yml`).
+- **Flatten nested defaults.** `${A:-${B:-c}}` is not parsed — flatten to
+  `${COMPOSE_ENV:-dev}`. And note **secrets are now last-wins**: audit for a key
+  set in both `.env` and `.secrets.env` (the new rule lets the secret win).
+- **Out of scope (keep as-is, alongside the kit):** a Terraform `TF_VAR_*`
+  fan-out, `pnpm`/`yarn` wrappers, and any non-compose tooling — the kit owns
+  only the compose env-chain.
 
 ---
 

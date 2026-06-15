@@ -178,11 +178,13 @@ if [ -n "$_files" ]; then
     bad "env-files did not include svc.env"
     printf '%s\n' "$_files" | sed 's/^/        /'
   fi
-  # .env is Layer-1 — must be present too.
+  # .env is Layer-1 and the chain lists it unconditionally — its absence is a
+  # regression (a total Layer-1 loss), so fail rather than info.
   if printf '%s\n' "$_files" | grep -q '/\.env$'; then
     ok "env-files includes Layer-1 .env"
   else
-    info "env-files did not list .env (ok if chain omits it)"
+    bad "env-files did NOT list .env (Layer-1 lost):"
+    printf '%s\n' "$_files" | sed 's/^/        /'
   fi
 else
   bad "env-files produced no output:"

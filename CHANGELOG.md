@@ -70,6 +70,32 @@ M5 (deep `services/<svc>/` nesting + submodules).
 - `templates/docker-env-chain` documents the optional per-machine
   `.${HOSTNAME}.env` layer and the new `${HOST}` / `${HOSTNAME}` substitution.
 
+### Fixed
+
+Found by an adversarial multi-agent parity review of M1–M5:
+
+- **Host-token sed-injection** (M2 regression): `${HOST}` / `${HOSTNAME}` was
+  spliced unescaped into a sed program, so a hostname containing `|` or `&`
+  crashed the engine. Now sanitized to `[A-Za-z0-9._-]` in both
+  `lib/compose-env.sh` and `bin/docker`.
+- **CRLF / whitespace in `COMPOSE_ENV`**: resolution from `.env` now strips a
+  trailing CR (Windows/WSL checkouts) and surrounding whitespace, and no longer
+  truncates a value containing `=` (`cut -d=` → `sed`). Both files.
+- **`init.sh` fan-out**: runs each subproject `init.sh` via `sh` (no `+x`
+  dependency) and skips symlinked dirs (avoids cycles).
+- **Test guards strengthened**: a missing Layer-1 `.env` now fails (was a silent
+  `info`); the `IS_DEV` check asserts the engine-rendered value (a service
+  consuming `${IS_DEV}`) instead of grepping the just-copied fixture; added a
+  real `.git`-directory submodule fixture. smoke-monorepo now 61 assertions.
+
+### Documented
+
+- `docs/monorepo.md` "Migrating an existing monorepo" — honest, mechanical
+  rework a real legacy tree needs (relative `env_file:` paths, `include:` instead
+  of `COMPOSE_FILE` fragment assembly, renaming stray `docker-compose*.yml`,
+  flattening nested defaults, secrets-now-last-wins; Terraform/pnpm/yarn out of
+  scope). Parity is with the env *features*, not always drop-in.
+
 ## [0.1.0] — 2026-06-15
 
 Initial release. Extracted and generalized from the SmartDriver infra tooling

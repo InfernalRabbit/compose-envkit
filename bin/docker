@@ -35,9 +35,13 @@ done
 # Used when a subproject is cloned standalone without a reachable scripts/.
 # (No Layer-2 env_file: discovery here — that lives in the full engine.)
 
-_FILE_ENV=$(grep -m1 '^COMPOSE_ENV=' "${SELF_DIR}/.env" 2>/dev/null | cut -d= -f2)
+_FILE_ENV=$(grep -m1 '^COMPOSE_ENV=' "${SELF_DIR}/.env" 2>/dev/null \
+  | sed -e 's/^COMPOSE_ENV=//' -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 ENV=${COMPOSE_ENV:-${_FILE_ENV:-dev}}
+# Sanitize the host token before it is spliced into sed (see lib/compose-env.sh).
 _HOST=${HOSTNAME:-$(hostname 2>/dev/null || uname -n 2>/dev/null || echo unknown)}
+_HOST=$(printf '%s' "$_HOST" | tr -cd 'A-Za-z0-9._-')
+[ -n "$_HOST" ] || _HOST=unknown
 
 _FILES=""
 if [ -f "${SELF_DIR}/.docker-env-chain" ]; then

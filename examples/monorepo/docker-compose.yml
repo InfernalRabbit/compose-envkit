@@ -28,6 +28,10 @@ services:
   # root-only orchestration (subprojects don't know about each other).
   web:
     networks: [shared]
+    environment:
+      # Demo of the root IS_DEV tier value reaching a service (true in dev,
+      # false in prod — selected by COMPOSE_ENV via .dev.env / .prod.env).
+      IS_DEV: "${IS_DEV:-unset}"
 
   api:
     networks: [shared]

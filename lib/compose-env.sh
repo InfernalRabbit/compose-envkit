@@ -38,13 +38,20 @@ shift
 
 [ -d "$PROJECT_DIR" ] || { echo "compose-env.sh: PROJECT_DIR '$PROJECT_DIR' is not a directory" >&2; exit 2; }
 
-_FILE_ENV=$(grep -m1 '^COMPOSE_ENV=' "${PROJECT_DIR}/.env" 2>/dev/null | cut -d= -f2 || true)
+# Resolve COMPOSE_ENV from .env (strip the key, a trailing CR from CRLF files,
+# and surrounding whitespace — `cut -d=` would also truncate values with '=').
+_FILE_ENV=$(grep -m1 '^COMPOSE_ENV=' "${PROJECT_DIR}/.env" 2>/dev/null \
+  | sed -e 's/^COMPOSE_ENV=//' -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)
 ENV=${COMPOSE_ENV:-${_FILE_ENV:-dev}}
 
 # Machine hostname for per-machine chain overrides (.${HOST}.env / .${HOSTNAME}.env).
 # An exported HOSTNAME wins (lets CI / tests pin it); otherwise the hostname
 # command, with fallbacks so the substitution never yields an empty token.
+# Sanitize to [A-Za-z0-9._-]: the value is spliced into a sed program below, so a
+# hostname containing the sed delimiter (|) or & must never reach it.
 _HOST=${HOSTNAME:-$(hostname 2>/dev/null || uname -n 2>/dev/null || echo unknown)}
+_HOST=$(printf '%s' "$_HOST" | tr -cd 'A-Za-z0-9._-')
+[ -n "$_HOST" ] || _HOST=unknown
 
 # Depth for the docker-compose*.yml search (Layer 2). Override with COMPOSE_DEPTH.
 _DEPTH=${COMPOSE_DEPTH:-3}
