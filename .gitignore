@@ -20,3 +20,10 @@
 
 # Test scratch (smoke.sh uses mktemp, but guard local runs)
 /tmp-smoke/
+
+# Go build artifacts — never commit a built binary (spec: no committed binaries).
+# NOTE: the vendored launcher `cenvkit` is a TRACKED POSIX shim, so do NOT ignore
+# the bare name; the local fast-path build must be namespaced (e.g. .cenvkit.bin).
+.cenvkit.bin
+.cenvkit-bin
+/dist/
