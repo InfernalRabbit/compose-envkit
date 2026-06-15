@@ -359,6 +359,31 @@ a subproject alike.
 
 ---
 
+## Bootstrap — `init.sh`
+
+`install.sh` drops a customizable `init.sh` (generated once, **never clobbered**)
+for the one-time "set this repo up on a fresh machine" step. Out of the box it:
+
+1. **Seeds env files** — copies each `example.X` → `.X` (`.env`, `.dev.env`,
+   `.secrets.env`, …) only if missing; fill in real values afterwards.
+2. **Fans out** — runs every immediate `<subdir>/init.sh`, so a monorepo root
+   sets up each subproject in one shot (build extensions/themes, `mkdir` data
+   dirs — whatever that subproject's own `init.sh` does). No service names are
+   baked into the kit; it's discovery-based.
+3. **Your steps** — a clearly marked section for project-specific setup, plus an
+   opt-in, git-guarded `assume_unchanged` helper that hides local edits to
+   *committed* demo env files from `git status`.
+
+```sh
+./init.sh        # idempotent — re-run any time
+```
+
+Deliberately POSIX `sh` and side-effect-light: **no `sudo`, no `chmod 777`, no
+secrets written anywhere** — exactly the legacy compile-step pitfalls the kit
+exists to avoid. Your project's `init.sh` is yours; the kit never overwrites it.
+
+---
+
 ## Two ways to run — unified vs isolated
 
 **Unified, from the root** (one stack):

@@ -18,8 +18,10 @@ set -eu
 KIT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 # --- Collect the scripts we ship --------------------------------------------
-# bin/docker has no .sh suffix; the rest are *.sh under lib/, test/, and the
-# top-level install.sh. mk/*.mk and completions/* are NOT POSIX sh — skip them.
+# bin/docker has no .sh suffix; the rest are *.sh under lib/, test/, templates/,
+# and the top-level install.sh. templates/*.sh (e.g. init.sh) are POSIX scripts
+# vendored into target projects and executed, so they must lint too. mk/*.mk and
+# completions/* are NOT POSIX sh — skip them.
 SCRIPTS=""
 add() { [ -f "$1" ] && SCRIPTS="${SCRIPTS}${SCRIPTS:+ }$1"; return 0; }
 
@@ -27,6 +29,7 @@ add "$KIT_DIR/install.sh"
 add "$KIT_DIR/bin/docker"
 for _f in "$KIT_DIR"/lib/*.sh; do add "$_f"; done
 for _f in "$KIT_DIR"/test/*.sh; do add "$_f"; done
+for _f in "$KIT_DIR"/templates/*.sh; do add "$_f"; done
 
 if [ -z "$SCRIPTS" ]; then
   printf 'lint: no scripts found under %s\n' "$KIT_DIR" >&2

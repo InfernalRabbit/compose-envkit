@@ -7,9 +7,19 @@ to [Semantic Versioning](https://semver.org/) and the
 ## [Unreleased]
 
 Work toward monorepo feature parity — M1 (harden the core), M2 (dev/prod
-cohesion + per-machine overrides), M3 (profiles + namespacing).
+cohesion + per-machine overrides), M3 (profiles + namespacing), M4 (bootstrap).
 
 ### Added
+
+- **Bootstrap `init.sh` (M4)**: `install.sh` now generates a customizable,
+  executable `init.sh` (never clobbered) — a project-agnostic one-time bootstrap
+  that seeds real env files from `example.*` (no-clobber), fans out to each
+  immediate `<subdir>/init.sh`, and ships an opt-in git-guarded `assume_unchanged`
+  helper. Deliberately POSIX sh with **no sudo / chmod 777 / persisted secrets**
+  (the legacy compile-step pitfalls). New `templates/init.sh`; `do_generate`
+  gained `--exec`; `test/lint.sh` now also lints `templates/*.sh`. Documented in
+  a "Bootstrap — init.sh" section of `docs/monorepo.md`.
+
 
 - **Profiles (M3)**: documented `COMPOSE_PROFILES` as pure passthrough (the shim
   forwards it to `docker compose` unchanged — no kit state). `examples/monorepo/`

@@ -48,8 +48,10 @@ cd examples/monorepo
 #    that would clobber the committed .docker-env-chain / example.env).
 sh /path/to/compose-envkit/install.sh .
 
-# 2. Real root env (non-secret) from the template.
-cp example.env .env
+# 2. Seed the real env files from the example.* templates (idempotent). This is
+#    what install.sh's generated ./init.sh does — or copy them by hand.
+./init.sh                 # → .env, .dev.env, .prod.env (never clobbers)
+# by hand: cp example.env .env  (and example.dev.env .dev.env, …)
 
 # 3. Render the unified config. The root ./docker discovers BOTH subprojects'
 #    env_file: paths (Layer-2, to COMPOSE_DEPTH=3) and folds them in, so the
