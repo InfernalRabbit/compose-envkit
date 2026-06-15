@@ -112,18 +112,39 @@ table-drive `Resolve` over `examples/monorepo/` fixtures and fake the `Engine`.
    set of `env_file` paths. Concrete call (verified, closes audit C2):
 
    ```go
-   opts, _ := cli.NewProjectOptions(in.ConfigFiles,
+   // configs := in.ConfigFiles; when empty, resolveComposeFiles reads COMPOSE_FILE
+   // from in.Env, interpolates ${COMPOSE_ENV}/${ENV}, splits on
+   // COMPOSE_PATH_SEPARATOR-else-os.PathListSeparator (NEVER ','), and joins
+   // relative entries to absolute against in.ProjectDir. See §4a + plan Task 3.
+   opts, _ := cli.NewProjectOptions(configs,
        cli.WithWorkingDirectory(in.ProjectDir),
-       cli.WithConfigFileEnv,        // honor COMPOSE_FILE + resolve include: (the no-glob win)
+       cli.WithEnv(in.Env),          // FIRST: seeds o.Environment so the options below see it
+       cli.WithConfigFileEnv,        // reads COMPOSE_FILE from the (now-seeded) env; see caveat
        cli.WithDefaultConfigPath,    // default docker-compose.y*ml discovery when none given
-       cli.WithEnv(in.Env),          // seed Layer-1 chain result for interpolation
        cli.WithProfiles(in.Profiles),
        cli.WithResolvedPaths(true),  // EnvFile.Path => ABSOLUTE
-       cli.WithInterpolation(true))
+       cli.WithInterpolation(true),
+       cli.WithoutEnvironmentResolution) // D1 lever: missing required env_file does not abort
    proj, err := opts.LoadProject(ctx)
    // iterate proj.Services (ACTIVE set; profile-off => proj.DisabledServices)
    //   -> svc.EnvFiles[].Path   (types.EnvFile{Path, Required OptOut, Format})
    ```
+
+   **Option-order + COMPOSE_FILE caveat (probe-verified, compose-go v2.11.0).**
+   `cli.NewProjectOptions` applies its `ProjectOptionsFn` **in slice order**, and
+   `cli.WithConfigFileEnv`/`cli.WithDefaultConfigPath` read `o.Environment`, which
+   starts **empty** — so `cli.WithEnv(in.Env)` MUST precede both, or `COMPOSE_FILE`
+   is silently dropped and only default discovery runs. Even with the order fixed,
+   `WithConfigFileEnv` does **not** interpolate `${VAR}` inside `COMPOSE_FILE`: it
+   splits on `COMPOSE_PATH_SEPARATOR`-else-`os.PathListSeparator` (never `,`) and
+   `os.Stat`s the **raw** string, so the fixture value
+   `docker-compose.${COMPOSE_ENV}.yml` (`examples/monorepo/example.env:18`) would be
+   stat'd literally and dropped. Therefore `COMPOSE_FILE` **selection +
+   interpolation** is done in cenvkit code (the `configs` arg above), NOT delegated
+   to `WithConfigFileEnv`. The `include:` graph IS still resolved by compose-go (the
+   genuine no-glob win); only `COMPOSE_FILE` selection/interpolation is the
+   cenvkit-side seam. Evidence: `.claude/artifacts/compose-go-d1-lever.md` +
+   compose-go v2.11.0 `cli/options.go`.
 
    `types.Project.Services` is already profile-filtered and include-merged, so
    iterating it gives the active env_file set with **no glob and no over-discovery**.
@@ -179,6 +200,18 @@ order is `<Layer 1 in chain order (…, .secrets.env LAST)>, <Layer 2 in
 deterministic order>`. Secrets stay last *within Layer 1*; acceptance asserts a
 Layer-2 env_file does **not** clobber a secret var.
 
+**Scope of cenvkit's control (decided 2026-06-15).** cenvkit owns the **file
+ORDER** of `COMPOSE_ENV_FILES` only; it does NOT re-engineer variable precedence.
+`docker compose` owns `env_file:` resolution and the last-wins precedence over
+`COMPOSE_ENV_FILES`. Concretely: "secrets last" is a **within-Layer-1** guarantee
+(cenvkit emits `.secrets.env` after the other Layer-1 files), and the acceptance
+guard for it asserts at the **value level within the chain** — a var set in both
+`.env` and `.secrets.env` renders as the `.secrets.env` value (cenvkit's actual
+responsibility: chain ordering). A Layer-2 service `env_file:` that reuses a
+chain-var name will win per compose's last-wins (Layer-2 is emitted after
+Layer-1) — this is **documented, not prevented**. Migration caveat: do not reuse
+secret variable names in service `env_files`.
+
 ## 5. CLI surface
 
 - `cenvkit compose <args>` — assemble chain, `exec docker compose` (the core).
@@ -227,9 +260,10 @@ compose, they don't compete. The kit therefore:
 - **Evolve in place.** Add the Go module alongside the sh kit. The sh kit remains
   functional as legacy/reference until the Go tool reaches parity.
 - **Acceptance via the existing suite.** Port `test/smoke-monorepo.sh` (61
-  assertions) and `test/smoke.sh` to drive `cenvkit` instead of `./docker`. The
-  Go tool is "done for v1" when it passes the same acceptance suite. The
-  `examples/monorepo/` blueprint is the shared fixture.
+  assertions; ported target **60** after the S4 delta — see §13.1) and
+  `test/smoke.sh` to drive `cenvkit` instead of `./docker`. The Go tool is "done
+  for v1" when it passes the same acceptance suite. The `examples/monorepo/`
+  blueprint is the shared fixture.
 - **Flip at parity, then deprecate sh.** Once green, `cenvkit` becomes the
   documented default; the sh `./docker`/`scripts/`/`lib/`/`mk/` are marked
   deprecated (kept one release for migrants, then removed).
@@ -271,6 +305,16 @@ compose, they don't compete. The kit therefore:
   semantics. Where upstream changes behavior, follow it. compose-go's API shifts
   release-to-release (e.g. `ProjectFromOptions` is already deprecated for the
   `LoadProject` method) — this is exactly why it is isolated behind `internal/engine`.
+- **On a compose-go bump, re-confirm the COMPOSE_FILE seam (probe, don't assume):**
+  (1) the `ProjectOptionsFn` ordering contract — `cli.WithEnv(in.Env)` must still
+  apply **before** `cli.WithConfigFileEnv`/`cli.WithDefaultConfigPath` (both read
+  `o.Environment`, which starts empty); and (2) `cli.WithConfigFileEnv` still does
+  **not** interpolate `${VAR}` inside `COMPOSE_FILE` (it splits on
+  `COMPOSE_PATH_SEPARATOR`-else-`os.PathListSeparator`, never `,`, and stats the raw
+  string). If either changes, revisit §4 + §4a and the cenvkit-side
+  `resolveComposeFiles` helper. Cite compose-go v2.11.0 `cli/options.go` and
+  `.claude/artifacts/compose-go-d1-lever.md` (the option-order probe) so the next
+  bumper can re-run it. Cross-ref §4a (the `env_file:` path interpolation model).
 
 ## 11. Non-goals / deferred
 
@@ -307,20 +351,35 @@ compose, they don't compete. The kit therefore:
 
 ## 13. Acceptance criteria (v1 done)
 
-1. `cenvkit` passes the ported `smoke-monorepo` (**61** assertions — exact, S4)
-   and `smoke` suites — behavior parity with the sh kit, with these **deliberate
-   inversions** the port must encode (audit G1–G5, plan in
+1. `cenvkit` passes the ported `smoke-monorepo` (**60** assertions — exact, S4;
+   see recount note below) and `smoke` suites — behavior parity with the sh kit,
+   with these **deliberate inversions** the port must encode (audit G1–G5, plan in
    `.claude/artifacts/acceptance-port-plan.md`):
-   - **G1/G2 (scenarios 9, 10):** over-discovery + `docker-compose*.yml`-glob
+   - **G1/G2 (scenarios 9, 10, 22):** over-discovery + `docker-compose*.yml`-glob
      assertions **invert** — compose-go's include-graph eliminates those sh
      quirks; the ported assertions verify the *correct* (no-over-discovery)
-     behavior, not the old quirk.
+     behavior, not the old quirk. Scenario 22 (submodule shape) is the same
+     non-included-subproject over-discovery quirk: a `vendored/`/`vendored2/`
+     subproject NOT in the root `include:` block is NOT discovered (the `.git`
+     gitlink-vs-directory distinction is moot under the include-graph).
    - **G3 (scenario 11):** `COMPOSE_DEPTH` is accepted-but-ignored (§5).
    - **G4 (scenario 14):** the inline fallback-shim scenario has **no Go
      equivalent** (the binary IS the engine) — rewrite as "chain-only when no
      compose file present".
    - **G5:** confirm the final install-artifact set for the `smoke.sh` layout
      checks (cenvkit binary/shim vs the sh `scripts/` layout).
+
+   **S4 recount (2026-06-15, lead-verified by running the suite).** Baseline is
+   **61**: `test/smoke-monorepo.sh` self-reports `passed: 61` when run with
+   `SMOKE_SKIP_DOCKER=1` (matches the standing project fact; the per-scenario
+   PASS tally sums to exactly 61). Applying the S4 deltas to that verified
+   baseline: scenarios 9, 10, 22 are **polarity flips** (count-neutral under the
+   include-graph — still 1, 2, 2 assertions respectively); scenario 11 drops
+   **11.2** (the `COMPOSE_DEPTH=4` assertion is untestable under the include-graph:
+   `a/b/c/docker-compose.yml` is never in the root `include:`), so **−1**. Final:
+   **N = 60**. The acceptance gate asserts this exact count; qa confirms the exact
+   ported count during T9 and the lead signs off on N=60. (Note: an earlier fold
+   draft mis-stated the baseline as 54 — corrected here against the live suite.)
 2. Engine-ceiling bugs structurally gone: `${SVC_DIR}` + nested `${...}` resolve;
    no glob over-discovery (include-aware); no sed-injection class (pure Go).
 3. **New guard tests, each RED on a pre-fix/naive impl:**

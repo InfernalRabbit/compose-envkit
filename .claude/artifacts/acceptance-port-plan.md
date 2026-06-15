@@ -8,8 +8,11 @@ received via DM 2026-06-15; full API in `.claude/artifacts/compose-go-api.md §3
 
 ## 0. Ground rules for the port
 
-**Source of truth:** `test/smoke-monorepo.sh` (23 scenarios, 61 assertions) +
-`test/smoke.sh` (7 sections). These run against the sh kit's `./docker` shim.
+**Source of truth:** `test/smoke-monorepo.sh` (23 scenarios, **61** assertions —
+the suite self-reports `passed: 61` when run, and the per-scenario PASS tally
+sums to 61) + `test/smoke.sh` (7 sections). After the S4 deltas (drop 11.2;
+scenarios 9/10/22 are count-neutral polarity flips) the ported `smoke-monorepo`
+target is **60** assertions. These run against the sh kit's `./docker` shim.
 The port replaces every `./docker` and `run_shim` invocation with `cenvkit`
 subcommands while keeping the assertion logic unchanged. The Go tool is
 "v1 done" when ported suites stay green (spec §8 / §13).
@@ -56,7 +59,7 @@ lead's ruling on required-missing env_file behavior (fatal vs. skip).
 
 ---
 
-## 1. `test/smoke-monorepo.sh` — assertion map (23 scenarios)
+## 1. `test/smoke-monorepo.sh` — assertion map (23 scenarios, 61 assertions baseline)
 
 ### [1] Copy blueprint + install (3 assertions)
 
@@ -172,12 +175,12 @@ compose-go's default discovery matches `compose.yaml`, `compose.yml`,
 ported assertion should verify that compose-go's standard discovery picks up all
 canonical filenames. Flag to lead.
 
-### [11] COMPOSE_DEPTH boundary (2 assertions, no docker)
+### [11] COMPOSE_DEPTH boundary (2 → 1 assertion; 11.2 DROPPED, no docker)
 
 | # | Assertion | Type | cenvkit invocation | Notes |
 |---|---|---|---|---|
-| 11.1 | depth-4 compose missed at default | **E** | `cenvkit env-files` | |
-| 11.2 | depth-4 found with COMPOSE_DEPTH=4 | **E** | `COMPOSE_DEPTH=4 cenvkit env-files` | |
+| 11.1 | depth-4 compose missed at default (out-of-include = not-found) | **E** | `cenvkit env-files` | keep/reframe |
+| ~~11.2~~ | ~~depth-4 found with COMPOSE_DEPTH=4~~ | — | — | **DROPPED (S4 −1):** `a/b/c/docker-compose.yml` is never in the root `include:`, so `.deep.env` is never enumerated regardless of `COMPOSE_DEPTH`; the knob is a no-op (accepted-but-ignored) |
 
 **BEHAVIOR CHANGE WARNING.** `COMPOSE_DEPTH` controls the sh kit's find-by-glob
 depth. With compose-go's include-graph resolution, depth is implicit (the loader
@@ -295,17 +298,24 @@ These are independent of the engine interface.
 | 21.1 | services/reports/.reports.env discovered from root | **E** | `cenvkit env-files` | engine include-graph reaches depth 3 |
 | 21.2 | REPORTS_PORT=15151 resolved | **E** | `cenvkit compose config` | docker-dependent |
 
-### [22] Submodule shape (2 assertions)
+### [22] Submodule shape (2 assertions) — INVERTED (G1/G2 over-discovery class)
 
 | # | Assertion | Type | cenvkit invocation | Notes |
 |---|---|---|---|---|
-| 22.1 | .git gitlink subproject discovered | **E** | `cenvkit env-files` | engine must not prune .git subdirs |
-| 22.2 | .git directory subproject discovered | **E** | `cenvkit env-files` | same — find-not-pruned |
+| 22.1 | .git gitlink subproject NOT discovered | **E** | `cenvkit env-files` | INVERSION: non-included subproject not enumerated |
+| 22.2 | .git directory subproject NOT discovered | **E** | `cenvkit env-files` | same — `.git` distinction moot under include-graph |
 
-In the Go port, "discovery" is via compose-go include-graph, not find-by-glob.
-If these subprojects are in the root's `include:` list, they are found by the
-loader regardless of .git presence. Assert that the engine's `Result.EnvFiles`
-includes the vendored subproject's env files.
+**BEHAVIOR CHANGE — RECLASSIFIED to the G1/G2 over-discovery inversion class.**
+The legacy suite creates `vendored/` and `vendored2/` subprojects at test time
+that the root `docker-compose.yml` does **NOT** `include:` (the include block is
+exactly `./web`, `./api`, `./services/reports/` — `examples/monorepo/docker-compose.yml:20-23`).
+The sh kit finds them by find-by-glob, blind to `.git`; compose-go's include-graph
+never enumerates a non-included subproject's env_file. So `.vend.env`/`.vend2.env`
+are **ABSENT** from `Result.EnvFiles`. The `.git` gitlink (22.1) vs real `.git`
+directory (22.2) distinction is moot under the include-graph (no `.git` pruning
+exists), so both collapse to negative assertions. This is the SAME class as
+scenario 9 — assert the include graph, never the glob list. (Polarity flip,
+count-neutral — see §4 G1.)
 
 ### [23] Host token sanitization (2 assertions)
 
@@ -412,12 +422,21 @@ compose and are gated by `SMOKE_SKIP_DOCKER`.
 
 ## 4. Gaps identified
 
-### G1: Over-discovery inversion (scenarios 9, 10)
+### G1: Over-discovery inversion (scenarios 9, 10, 22)
 
 The sh kit asserts stray files ARE discovered (glob-based). compose-go
 include-graph means they will NOT be discovered. The ported suite must flip
 these assertions. **Action:** flag to lead before writing tests; do not silently
 change assertion polarity.
+
+**Scenario 22 (submodule shape) belongs to this class.** Its `vendored/`/`vendored2/`
+subprojects are NOT in the root `include:` list (verified: include is exactly
+`./web`, `./api`, `./services/reports/`), so they are NOT discovered under the
+include-graph — the `.git` gitlink-vs-directory distinction is moot (no `.git`
+pruning exists). Both 22.1 and 22.2 invert to negatives (polarity flip,
+count-neutral). **Process guard:** audit every test-time-created subproject
+against the fixture's `include:` set; any subproject outside it must assert
+"not discovered."
 
 ### G2: Glob name matching (scenario 10)
 
@@ -493,8 +512,13 @@ flagged assertions.
 
 | Suite | Total scenarios | Total assertions | Engine-dependent (E) | Chain-only (C) | Wiring (W) |
 |---|---|---|---|---|---|
-| smoke-monorepo.sh | 23 | 61 | ~38 | ~13 | ~10 |
+| smoke-monorepo.sh | 23 | 61 baseline → **60** ported (drop 11.2) | ~38 | ~13 | ~10 |
 | smoke.sh | 7 | ~25 | ~12 | ~4 | ~9 |
+
+> The smoke-monorepo baseline is **61** (verified: the suite self-reports
+> `passed: 61`; the per-scenario PASS tally sums to 61). Ported target after the
+> S4 deltas (9/10/22 polarity flips = count-neutral; drop 11.2 = −1) is **60** —
+> pinned in spec §13.1 and plan Task 7 Step 6, **lead signs off**.
 
 Gaps requiring lead decision before porting: **G1 (§9), G2 (§10), G3 (§11),
 G4 (§14), G5 (install layout), G6 (D1 behavior boundary).**
