@@ -5,6 +5,11 @@ manual path, the root-vs-subproject choices, and the overlay/secret conventions.
 
 For the *why* behind the chain, see [concepts](concepts.md).
 
+> **Deprecated (v1).** This document covers the legacy POSIX-`sh` kit
+> (`install.sh` / `./docker` / `scripts/`), now the parity reference. New
+> projects should use the Go CLI **`cenvkit`** — see [cenvkit.md](cenvkit.md).
+> The sh kit is retained for one release, then removed.
+
 ---
 
 ## The install layout contract

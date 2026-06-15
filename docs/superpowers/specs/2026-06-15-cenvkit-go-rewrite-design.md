@@ -1,10 +1,12 @@
 # cenvkit — Go rewrite design (compose-envkit → `cenvkit`)
 
-Status: approved direction (brainstorming), 2026-06-15. Dry-run findings folded
-2026-06-15 (sources: `.claude/artifacts/compose-go-api.md`, `spec-audit.md`,
-`acceptance-port-plan.md`). **All open decisions locked** — D1 confirmed by user
-2026-06-15 (§4b: lenient at assembly, upstream `required:` at runtime). Next:
-implementation plan.
+Status: **implemented (v1), 2026-06-15** — the Go CLI `cenvkit` is built and green
+(`internal/{chain,engine,envfiles,bootstrap,debug}` + `cmd/cenvkit`; compose-go
+v2.11.0 isolated behind `internal/engine`; the `examples/monorepo` smoke suites
+ported to drive `cenvkit`, N=60, docker-validated). All decisions locked; D1
+confirmed (§4b: lenient at assembly, upstream `required:` at runtime). Sources:
+`.claude/artifacts/{compose-go-api.md,compose-go-d1-lever.md,acceptance-port-plan.md,spec-audit.md}`;
+plan: `docs/superpowers/plans/2026-06-15-cenvkit-v1-implementation.md`.
 
 ## 1. Context & motivation
 

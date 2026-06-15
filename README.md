@@ -13,12 +13,46 @@ your service `env_file:` actually defines instead of silently falling back to
 `3000`. (That's the whole reason the kit exists — see
 [The gap](#the-gap-native-compose-doesnt-close).)
 
-It is a portable extraction of the SmartDriver infra tooling: pure POSIX `sh`,
-portable `awk`, GNU make. No Python, no Node, no extra binaries.
+**v1 is `cenvkit`, a Go CLI** built on Docker's own compose loader
+(`compose-spec/compose-go`) — it replaces the original POSIX-`sh` engine, which is
+now the legacy/reference implementation (deprecated, retained one release). The
+Go CLI needs only a Go toolchain (no Python, no Node).
 
 ---
 
-## Install in one command
+## Install — cenvkit (the Go CLI, v1 · current)
+
+`cenvkit` is built on Docker's own loader (`compose-spec/compose-go`, pinned
+v2.11.0). Two distribution modes:
+
+```sh
+# Installed (recommended)
+go install github.com/compose-envkit/compose-envkit/cmd/cenvkit@latest
+# or ephemeral: go run github.com/compose-envkit/compose-envkit/cmd/cenvkit@latest <args>
+```
+
+In your project:
+
+```sh
+cenvkit init               # seed .X from example.X (no-clobber), fan out one level
+cenvkit env-files          # the resolved COMPOSE_ENV_FILES chain, one path/line
+cenvkit compose config     # interpolation now includes the env_file: layer
+cenvkit env-debug --chain  # inspect the chain
+```
+
+Or **vendor** it: commit the Go module + the POSIX `cenvkit` shim and run
+`./cenvkit <args>` (needs a Go toolchain; for speed, `go build -o .cenvkit.bin
+./cmd/cenvkit` — gitignored — and run that). Full command + behavior reference:
+**[`docs/cenvkit.md`](docs/cenvkit.md)**.
+
+---
+
+## Legacy install — POSIX sh kit (deprecated, retained one release)
+
+> **Deprecated (v1).** The pure-`sh` kit below (`install.sh`, `./docker`,
+> `scripts/`, `lib/`, `mk/`) is the original implementation and now the parity
+> reference. It still works and is retained for one release, then removed — new
+> projects should use `cenvkit` above.
 
 From a complete checkout of the kit, point `install.sh` at your project:
 
@@ -199,7 +233,12 @@ make env-debug-trace VAR=APP_PORT       # the whole resolution stack
 
 ```
 compose-envkit/
-├── bin/docker                       # universal self-locating shim
+├── cmd/cenvkit/                     # [v1] the Go CLI entry (cobra)
+├── internal/                        # [v1] chain · engine · envfiles · debug · bootstrap
+│                                    #      (compose-go is isolated behind internal/engine)
+├── cenvkit                          # [v1] vendored-mode POSIX shim (go run ./cmd/cenvkit)
+├── go.mod / go.sum                  # [v1] module + compose-go v2.11.0 pin
+├── bin/docker                       # [legacy sh kit] universal self-locating shim
 ├── lib/
 │   ├── compose-env.sh               # COMPOSE_ENV_FILES assembly (the engine)
 │   ├── parse-compose-env-files.sh   # portable-awk env_file: parser (Layer 2)
@@ -222,11 +261,16 @@ engine + `.mk` files + `completions/`), `.docker-env-chain`, and `example.*`.
 
 ## Documentation
 
+- [`docs/cenvkit.md`](docs/cenvkit.md) — **the Go CLI (v1) — start here**:
+  install (both modes), commands, and behavior contracts (D1 missing-`env_file:`,
+  variable precedence, the `env_file:`-path model, `COMPOSE_DEPTH`, over-discovery
+  removal).
 - [`docs/concepts.md`](docs/concepts.md) — the env-chain order, Layer-2
   discovery, the `env_file:`→interpolation gap, and the read-time
   `${VAR:+...}` gotcha.
-- [`docs/integration.md`](docs/integration.md) — `install.sh` flow and manual
-  integration; root vs isolated-subproject setup; overlay/secret conventions.
+- [`docs/integration.md`](docs/integration.md) — *[legacy sh kit]* `install.sh`
+  flow and manual integration; root vs isolated-subproject setup; overlay/secret
+  conventions.
 - [`docs/monorepo.md`](docs/monorepo.md) — root-`include:` topology (unified
   stack from root), cross-subproject Layer-2 + the `COMPOSE_DEPTH` knob, env
   layering, and root Makefile delegation (`make -C sub`). Blueprint in

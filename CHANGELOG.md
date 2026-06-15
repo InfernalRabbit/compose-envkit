@@ -6,6 +6,38 @@ to [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+### cenvkit — Go rewrite (v1)
+
+The engine is rewritten as a Go CLI, **`cenvkit`**, built on Docker's own compose
+loader (`github.com/compose-spec/compose-go/v2`, pinned v2.11.0). It assembles
+`COMPOSE_ENV_FILES` from the real, include-aware, interpolated model and `exec`s
+`docker compose` — eliminating the hand-rolled `awk`/`sed` engine's whole bug
+class (no glob over-discovery; `${SVC_DIR}`/nested `${...}` resolve; no
+sed-injection). Dual distribution: `go install`, `go run …@latest`, or a vendored
+POSIX `cenvkit` shim. Commands: `compose`, `env-files`, `env-debug`, `validate`,
+`init`, `version`. Full reference: [`docs/cenvkit.md`](docs/cenvkit.md).
+
+- **Behavior (documented):** a missing *required* `env_file:` is lenient at chain
+  assembly and upstream-fatal at the real `docker compose` run (D1); variable
+  precedence is `docker compose`'s last-wins over `COMPOSE_ENV_FILES` (cenvkit
+  only orders the file list — "secrets last" is a within-chain guarantee, not a
+  cross-layer one); `COMPOSE_DEPTH` is accepted-but-ignored (the include-graph
+  makes depth-glob obsolete); an `env_file:` *path* may reference Layer-1/chain
+  vars only (single-pass, §4a).
+- **Acceptance:** the `examples/monorepo` smoke suites are ported to drive
+  `cenvkit` (**N=60**; the legacy depth-knob assertion 11.2 is dropped as
+  untestable under the include-graph; scenarios 9/10/22 invert — a non-included
+  subproject is not discovered). Table-driven unit tests per package; compose-go
+  isolated behind `internal/engine` (CI-enforced seam check).
+
+### Deprecated
+
+- The POSIX-`sh` kit (`bin/docker`, `lib/`, `mk/`, `scripts/`, `install.sh`) is
+  **deprecated** in favor of `cenvkit`. It still works, remains the parity
+  reference, and is retained for one release, then removed.
+
+### Earlier — monorepo feature parity (sh kit, M1–M5)
+
 Work toward monorepo feature parity — M1 (harden the core), M2 (dev/prod
 cohesion + per-machine overrides), M3 (profiles + namespacing), M4 (bootstrap),
 M5 (deep `services/<svc>/` nesting + submodules).
