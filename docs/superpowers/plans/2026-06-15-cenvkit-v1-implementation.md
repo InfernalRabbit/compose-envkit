@@ -758,7 +758,7 @@ func (e *composeEngine) Resolve(ctx context.Context, in Input) (Result, error) {
 	// empty we compute the config list ourselves and pass it as the configs arg.
 	configs := in.ConfigFiles
 	if len(configs) == 0 {
-		configs = resolveComposeFiles(in.ProjectDir, in.Env) // nil => default discovery
+		configs = resolveComposeFiles(in.ProjectDir, in.Env) // existing config files (incl. standard-name discovery when COMPOSE_FILE unset); empty only when the gate already skipped Layer-2
 	}
 	opts, err := cli.NewProjectOptions(configs,
 		cli.WithWorkingDirectory(in.ProjectDir),
@@ -810,7 +810,7 @@ func (e *composeEngine) Resolve(ctx context.Context, in Input) (Result, error) {
 
 - [ ] **Step 5: Implement `internal/engine/discover.go`** (one shared COMPOSE_FILE resolver + the G4 chain-only gate)
 
-ONE resolver, `resolveComposeFiles`, is used by BOTH `engine.Resolve` (Step 4, as the `configs` arg when `in.ConfigFiles` is empty) AND `HasComposeFile` (gate), so the gate and the loader can never disagree. It (a) reads `COMPOSE_FILE` from the seed env; (b) interpolates `${COMPOSE_ENV}`/`${ENV}` (and any var in the seed env); (c) splits on `COMPOSE_PATH_SEPARATOR` if set in the seed env, else `os.PathListSeparator` (`:` on unix) — **never `,`** (compose-go never uses `,`; probe-verified v2.11.0); (d) joins relative entries to absolute against `dir`; (e) keeps only entries that exist on disk. `HasComposeFile` is `len(resolveComposeFiles(...)) > 0`.
+ONE resolver, `resolveComposeFiles`, is used by BOTH `engine.Resolve` (Step 4, as the `configs` arg when `in.ConfigFiles` is empty) AND the `HasComposeFileEnv` gate, so the gate and the loader can never disagree. It (a) reads `COMPOSE_FILE` from the seed env; (b) interpolates `${COMPOSE_ENV}`/`${ENV}` (and any var in the seed env); (c) splits on `COMPOSE_PATH_SEPARATOR` if set in the seed env, else `os.PathListSeparator` (`:` on unix) — **never `,`** (compose-go never uses `,`; probe-verified v2.11.0); (d) joins relative entries to absolute against `dir`; (e) keeps only entries that exist on disk; (f) **when `COMPOSE_FILE` is unset, falls back to standard-name discovery in `dir`** so it is a complete answer. `HasComposeFileEnv(dir, env)` is `len(resolveComposeFiles(...)) > 0`; the convenience `HasComposeFile(dir, composeFileEnv)` wraps it.
 
 ```go
 package engine
@@ -845,13 +845,24 @@ func interpolateComposeFile(entry string, env []string) string {
 	return r.Replace(entry)
 }
 
-// resolveComposeFiles turns COMPOSE_FILE (from the seed env) into an ordered
-// slice of existing absolute config paths. Returns nil when COMPOSE_FILE is
-// unset (callers fall back to compose-go default discovery).
+// resolveComposeFiles turns the seed env into an ordered slice of existing
+// absolute config paths — the single resolver shared by Resolve (the configs
+// arg) and the HasComposeFileEnv gate, so they cannot drift. When COMPOSE_FILE
+// is UNSET it falls back to standard-name discovery in dir (so the resolver is
+// itself a complete "what config files exist?" answer; qa's discover_test pins
+// len(resolveComposeFiles(dir, env)) > 0 for a bare compose.yaml with no
+// COMPOSE_FILE set).
 func resolveComposeFiles(dir string, env []string) []string {
 	cf := seedLookup(env, "COMPOSE_FILE")
 	if cf == "" {
-		return nil
+		var out []string
+		for _, n := range standardComposeNames {
+			p := filepath.Join(dir, n)
+			if _, err := os.Stat(p); err == nil {
+				out = append(out, p)
+			}
+		}
+		return out
 	}
 	sep := seedLookup(env, "COMPOSE_PATH_SEPARATOR")
 	if sep == "" {
@@ -878,15 +889,7 @@ func resolveComposeFiles(dir string, env []string) []string {
 // honored, and shares resolveComposeFiles with Resolve so gate and loader cannot
 // drift. When false, callers skip Layer-2 entirely (chain-only mode, spec §13 G4).
 func HasComposeFileEnv(dir string, env []string) bool {
-	if seedLookup(env, "COMPOSE_FILE") != "" {
-		return len(resolveComposeFiles(dir, env)) > 0
-	}
-	for _, n := range standardComposeNames {
-		if _, err := os.Stat(filepath.Join(dir, n)); err == nil {
-			return true
-		}
-	}
-	return false
+	return len(resolveComposeFiles(dir, env)) > 0
 }
 
 // HasComposeFile is the single-COMPOSE_FILE-value convenience form (still
