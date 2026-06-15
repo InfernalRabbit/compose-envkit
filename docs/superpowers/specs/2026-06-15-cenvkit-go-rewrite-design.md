@@ -2,8 +2,9 @@
 
 Status: approved direction (brainstorming), 2026-06-15. Dry-run findings folded
 2026-06-15 (sources: `.claude/artifacts/compose-go-api.md`, `spec-audit.md`,
-`acceptance-port-plan.md`). One decision still **pending user confirmation: D1**
-(§4). Next: implementation plan.
+`acceptance-port-plan.md`). **All open decisions locked** — D1 confirmed by user
+2026-06-15 (§4b: lenient at assembly, upstream `required:` at runtime). Next:
+implementation plan.
 
 ## 1. Context & motivation
 
@@ -149,16 +150,25 @@ we seed via `WithEnv` (= the Layer-1 chain result), NOT values defined inside
   case is unsupported (errors / does not silently mis-resolve), not "magically
   works". A bounded two-pass fixpoint is **deferred** (§11).
 
-### 4b. Missing `env_file:` behavior — D1 (⚠️ PROVISIONAL, pending user confirm)
+### 4b. Missing `env_file:` behavior — D1 (✅ LOCKED, user-confirmed 2026-06-15)
 
 `types.EnvFile.Required` is `OptOut` (**default true** upstream — a missing
 *required* env_file makes `LoadProject` error). Parity tension: the sh kit
-silently skips missing files. **Lead's lean (parity-preserving):**
-**lenient at assembly, upstream at runtime** — the Layer-2 *enumeration* pass
-skips a missing env_file (so chain assembly never aborts and the smoke suite's
-missing-file-skip assertions stay green), while the actual `docker compose` exec
-enforces `required:` exactly as upstream. **This is parity-affecting and must be
-confirmed by the user before it is locked.**
+silently skips missing files. **Ruling (user-confirmed 2026-06-15):**
+**lenient at assembly, upstream `required:` at runtime** — the Layer-2
+*enumeration* pass skips a missing env_file (so chain assembly never aborts and
+the smoke suite's missing-file-skip assertions stay green), while the actual
+`docker compose` exec enforces `required:` exactly as upstream.
+
+**Implementation note:** the enumeration `LoadProject` must therefore *not* abort
+on a missing-but-required env_file. Achieve this by loading with the env_file
+requirement relaxed for the enumeration pass (e.g. treat enumeration-load
+env_files as `required: false`, or skip the not-on-disk path before it reaches
+`LoadProject`) — do NOT reimplement upstream's `required:` semantics; leave that
+to the downstream `docker compose` exec, which sees the unmodified compose model.
+The implementation plan must spell out exactly which lever is used and an
+acceptance test must assert BOTH halves (assembly skips; runtime still fatal when
+`required: true` and the file is absent).
 
 ### 4c. Precedence vs dedup (resolves audit W3)
 
@@ -273,10 +283,11 @@ compose, they don't compete. The kit therefore:
 
 ## 12. Open / risk items
 
-**Still open — needs the user:**
-- **D1 (parity-affecting) — PENDING USER CONFIRM.** Missing *required* `env_file:`:
-  lenient-skip at Layer-2 enumeration vs upstream-fatal. Lead's lean = lenient at
-  assembly / upstream at runtime (§4b). Confirm before locking.
+**Still open — needs the user:** _(none — all decisions locked)_
+
+**Resolved by the user (kept here for traceability):**
+- ~~D1 (parity-affecting)~~ → **CONFIRMED 2026-06-15: lenient at assembly /
+  upstream `required:` at runtime** (§4b). No longer blocks the implementation plan.
 
 **Resolved by the dry-run (kept here for traceability):**
 - ~~compose-go API stability~~ → pinned **v2.11.0**, isolated behind
