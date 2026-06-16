@@ -97,8 +97,17 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 	mapping := template.Mapping(func(k string) (string, bool) { v, ok := chainEnv[k]; return v, ok })
 
 	// --- A: chain attribution over the ordered merged COMPOSE_ENV_FILES ---
+	// rep.Files is the full merged list (all layers); rep.ChainFiles is the
+	// Layer-1-only subset in chain order. env-debug --chain (and the bare default
+	// view) renders ChainFiles so secrets stay last WITHIN the Layer-1 chain
+	// (acceptance TestScenario12 [12.4]). Both appends happen before the missing-file
+	// continue so the file listings stay consistent, and before the chain-only
+	// early-return below so ChainFiles is populated in chain-only mode too.
 	for i, f := range in.EnvFiles {
 		rep.Files = append(rep.Files, f.Path)
+		if f.Layer == "layer1" {
+			rep.ChainFiles = append(rep.ChainFiles, f.Path)
+		}
 		m := parsed[i]
 		if m == nil {
 			continue // skip missing (parity)

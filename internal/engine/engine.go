@@ -21,8 +21,8 @@ type Input struct {
 	Profiles    []string // active profiles (M3)
 }
 
-// ProjectView is a compose-go-free projection so internal/debug and cmd never
-// import compose-go.
+// ProjectView is a compose-go-free projection so internal/provenance and cmd
+// never import compose-go.
 type ProjectView struct {
 	WorkingDir string
 	Services   map[string][]string // service -> existing resolved env_file abs paths
