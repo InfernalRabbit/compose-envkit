@@ -1,5 +1,5 @@
-// Package acceptance ports the smoke-monorepo.sh (23 scenarios, 60 assertions after
-// S4 recount) and smoke.sh suites to drive the cenvkit binary directly.
+// Package acceptance ports the smoke-monorepo.sh (23 scenarios, 68 assertions after
+// provenance recount) and smoke.sh suites to drive the cenvkit binary directly.
 //
 // Invocation map (replaces all ./docker / run_shim calls):
 //
@@ -14,11 +14,14 @@
 //	G4:    no fallback shim — chain-only mode succeeds with empty Layer-2
 //	G5:    install layout differs (no scripts/); cenvkit binary + .docker-env-chain
 //
-// Count: exactly 60 smoke-monorepo assertions (61 baseline − 1 for dropped 11.2).
-// C1 (§4a single-pass) and D1-runtime (§4b fatal) use throwaway fixtures, not counted.
+// Count: exactly 68 smoke-monorepo assertions (60 baseline + 8 provenance net-new:
+// --trace human ×2, --trace --json ×2, --effective --service --json ×1, W3-winner ×1,
+// chain-only ×2; --value --var SMOKE_VAL REPLACES the old v1 raw assertion → net 0).
+// C1 (§4a single-pass) and D1-runtime (§4b fatal) use throwaway fixtures, NOT counted in 68.
 package acceptance
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -777,6 +780,156 @@ services:
 	}
 	if strings.Contains(out, "base-val") {
 		t.Fatalf("[W3] secrets-last: base-val must be overridden by secret-real:\n%s", out)
+	}
+}
+
+// ─── env-debug provenance assertions (8 net-new; count 60→68) ────────────────
+
+// provenanceReport is the minimal shape we need to parse --json output for
+// provenance assertions. Fields not needed by these tests are omitted.
+type provenanceReport struct {
+	Services []struct {
+		Service string `json:"service"`
+		Entries []struct {
+			Key    string `json:"key"`
+			Value  string `json:"value"`
+			Source struct {
+				File  string `json:"file"`
+				Layer string `json:"layer"`
+			} `json:"source"`
+		} `json:"entries"`
+	} `json:"services"`
+	Vars map[string]struct {
+		Name   string `json:"name"`
+		Value  string `json:"value"`
+		Winner struct {
+			File  string `json:"file"`
+			Layer string `json:"layer"`
+		} `json:"winner"`
+		Effects []struct {
+			Service  string `json:"service"`
+			Field    string `json:"field"`
+			Resolved string `json:"resolved"`
+		} `json:"effects"`
+	} `json:"vars"`
+}
+
+// [A + B-lite] --trace --var WEB_PORT human: winner is web/.web.env (layer2)
+// and effects contain a web service ports entry. (2 assertions)
+func TestProvenance_Trace_WEB_PORT_Human(t *testing.T) {
+	root := stageMonorepo(t)
+	out, err := runCenvkit(t, root, nil, "env-debug", "--trace", "--var", "WEB_PORT")
+	if err != nil {
+		t.Fatalf("[prov-1] env-debug --trace --var WEB_PORT: %v\n%s", err, out)
+	}
+	// assertion 1: winner file contains web/.web.env
+	if !strings.Contains(out, "web/.web.env") {
+		t.Fatalf("[prov-1a] expected web/.web.env in --trace output:\n%s", out)
+	}
+	// assertion 2: an effect for service web is present
+	if !strings.Contains(out, "service web") {
+		t.Fatalf("[prov-1b] expected 'service web' effect in --trace output:\n%s", out)
+	}
+}
+
+// [A + B-lite] --trace --var WEB_PORT --json: winner.layer == "layer2", effects non-empty.
+// (2 assertions)
+func TestProvenance_Trace_WEB_PORT_JSON(t *testing.T) {
+	root := stageMonorepo(t)
+	out, err := runCenvkit(t, root, nil, "env-debug", "--trace", "--var", "WEB_PORT", "--json")
+	if err != nil {
+		t.Fatalf("[prov-2] env-debug --trace --var WEB_PORT --json: %v\n%s", err, out)
+	}
+	var rep provenanceReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("[prov-2] JSON parse failed: %v\n%s", err, out)
+	}
+	wp, ok := rep.Vars["WEB_PORT"]
+	if !ok {
+		t.Fatalf("[prov-2] WEB_PORT not in vars")
+	}
+	// assertion 1: winner.layer is layer2 (from web/.web.env, not Layer-1)
+	if wp.Winner.Layer != "layer2" {
+		t.Fatalf("[prov-2a] WEB_PORT winner.layer = %q, want layer2", wp.Winner.Layer)
+	}
+	// assertion 2: effects non-empty (B-lite: ${WEB_PORT} used in ports)
+	if len(wp.Effects) == 0 {
+		t.Fatalf("[prov-2b] WEB_PORT effects empty, want at least one port/env effect")
+	}
+}
+
+// [C] --effective --service web --json: web service has at least one entry
+// whose source.layer is "env_file" or "environment". (1 assertion)
+func TestProvenance_Effective_Web_JSON(t *testing.T) {
+	root := stageMonorepo(t)
+	out, err := runCenvkit(t, root, nil, "env-debug", "--effective", "--service", "web", "--json")
+	if err != nil {
+		t.Fatalf("[prov-3] env-debug --effective --service web --json: %v\n%s", err, out)
+	}
+	var rep provenanceReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("[prov-3] JSON parse failed: %v\n%s", err, out)
+	}
+	// find web service entries
+	for _, svc := range rep.Services {
+		if svc.Service != "web" {
+			continue
+		}
+		for _, e := range svc.Entries {
+			if e.Source.Layer == "env_file" || e.Source.Layer == "environment" {
+				return // assertion satisfied
+			}
+		}
+		t.Fatalf("[prov-3] web service entries have no env_file or environment source: %+v", svc.Entries)
+	}
+	t.Fatalf("[prov-3] web service not found in services: %+v", rep.Services)
+}
+
+// [W3 provenance form] A var set in both .env (earlier) and .secrets.env (later
+// in Layer-1) → --trace --var shows .secrets.env as winner (within-chain secrets-last).
+// (1 assertion)
+func TestProvenance_W3_SecretsLast_TraceWinner(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".docker-env-chain"), []byte(".env\n.secrets.env\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("API_TOKEN=base-val\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".secrets.env"), []byte("API_TOKEN=secret-real\n"), 0o644)
+
+	out, err := runCenvkit(t, dir, nil, "env-debug", "--trace", "--var", "API_TOKEN")
+	if err != nil {
+		t.Fatalf("[prov-4] env-debug --trace --var API_TOKEN: %v\n%s", err, out)
+	}
+	// assertion 1: winner is .secrets.env (last-wins within Layer-1)
+	if !strings.Contains(out, ".secrets.env") || !strings.Contains(out, "winner") {
+		t.Fatalf("[prov-4] expected .secrets.env as winner in --trace output:\n%s", out)
+	}
+}
+
+// [chain-only] A dir with no compose file → env-debug --trace --var X --json
+// succeeds (exit 0), services absent/empty, var is attributed layer1. (2 assertions)
+func TestProvenance_ChainOnly_JSON(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("CHAIN_X=val42\n"), 0o644)
+	// deliberately no compose file
+
+	out, err := runCenvkit(t, dir, nil, "env-debug", "--trace", "--var", "CHAIN_X", "--json")
+	if err != nil {
+		t.Fatalf("[prov-5] chain-only env-debug --json: %v\n%s", err, out)
+	}
+	var rep provenanceReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("[prov-5] JSON parse failed: %v\n%s", err, out)
+	}
+	// assertion 1: services is absent/empty (no compose file → chain-only)
+	if len(rep.Services) != 0 {
+		t.Fatalf("[prov-5a] chain-only: expected empty services, got %+v", rep.Services)
+	}
+	// assertion 2: CHAIN_X is attributed to layer1 (from the .env chain file)
+	cx, ok := rep.Vars["CHAIN_X"]
+	if !ok {
+		t.Fatalf("[prov-5b] CHAIN_X not in vars")
+	}
+	if cx.Winner.Layer != "layer1" {
+		t.Fatalf("[prov-5b] CHAIN_X winner.layer = %q, want layer1", cx.Winner.Layer)
 	}
 }
 
