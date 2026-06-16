@@ -120,16 +120,30 @@ type EffectFact       struct { Service, Field, Resolved string }
 1. `chain.Resolve(dir)` → `Files`, `Vars`, and per-var attribution (A) by
    `dotenv.Parse`-ing each `COMPOSE_ENV_FILES` entry in order (last write wins;
    record shadowed sources).
-2. `engine.Provenance(ctx, Input{ProjectDir, Env: Vars, ConfigFiles, Profiles})`:
-   - **load₁** `WithInterpolation(true)` (+ environment resolution) → resolved model.
-   - **load₂** `WithInterpolation(false)` → fields hold literal `${VAR}` strings.
-   - **B-lite:** run `template.ExtractVariables` over load₂'s config dict (and/or
-     walk it) to find each `${VAR}` reference and its field path; for each, read
-     the resolved value at the same field path in load₁ → `EffectFact{service,
-     field, resolved}`.
-   - **C:** for each service, `dotenv.Parse` its `env_file:` entries in order, then
-     apply inline `environment:` (which overrides), attributing the source file of
-     each key → `ServiceEnvFacts`.
+2. `engine.Provenance(ctx, Input{ProjectDir, Env: Vars, ConfigFiles, Profiles})`
+   — mechanism **verified** against compose-go v2.11.0
+   (`.claude/artifacts/compose-go-provenance-probe.md`):
+   - **One RAW (non-interpolated) load:** `loader.LoadConfigFiles(ctx, configFiles,
+     workingDir)` → `*types.ConfigDetails`; set `details.Environment` = the chain
+     env; then `loader.LoadModelWithContext(ctx, *details, {SkipInterpolation,
+     SkipValidation, SkipConsistencyCheck, SkipResolveEnvironment})` → a raw
+     `map[string]any` dict where `${VAR}` literals survive.
+   - **B-lite:** *walk* the raw dict to `(field-path, string-leaf)`; at each leaf,
+     `template.ExtractVariables(map[string]any{"x": leaf}, template.DefaultPattern)`
+     gives the referenced var NAMES (names only — no path; that is why we walk), and
+     `template.SubstituteWithOptions(leaf, mapping, template.WithoutLogging)`
+     resolves the leaf *in place* (`mapping` = lookup over the chain env). Emit
+     `EffectFact{service, field, resolved}` per name. **Do NOT** read the resolved
+     value from an interpolated load — interpolation expands short forms (`ports:
+     "8080:80"` → a struct): the *normalization-on-interpolation trap*. One raw
+     load + per-leaf substitute avoids it entirely.
+   - **C:** relies on the engine's existing `cli.WithoutEnvironmentResolution` (the
+     D1 lever), which keeps `ServiceConfig.Environment` INLINE-ONLY and leaves the
+     `env_file:` list separate in `svc.EnvFiles`. Per service: `dotenv.ReadFile`
+     each `svc.EnvFiles[].Path` in declaration order (later overrides earlier), then
+     apply inline `svc.Environment` (`map[string]*string`, overrides), recording the
+     source of each final key → `ServiceEnvFacts`. (If the D1 lever were dropped,
+     `Environment` would be env_file-merged and C would be unattributable.)
 3. `provenance.Build(chainAttr, facts)` → `Report`.
 4. Render: human tree/table by default; `--json` emits `Report`.
 
@@ -173,9 +187,9 @@ type EffectFact       struct { Service, Field, Resolved string }
   chain attribution — winner/overridden ordering, Effects mapping, ServiceEnv
   sources. Pure Go, no docker.
 - **`engine.Provenance` (unit):** over `examples/monorepo` (service `env_file`s
-  exist on disk) + scratch fixtures — assert the two-load diff attributes a real
-  var used in a field (e.g. a `ports:` `${VAR}`) and that per-service sources are
-  correct. No docker.
+  exist on disk) + scratch fixtures — assert the raw-load dict walk attributes a
+  real var used in a field (a `ports:` `${VAR}` → service/field/resolved) and that
+  per-service sources are correct. No docker.
 - **`--json` golden tests** — stable schema.
 - **Acceptance:** new `env-debug --trace`/`--json` assertions. These are **new**
   assertions → the acceptance count grows beyond N=60; the new exact total is
@@ -184,13 +198,16 @@ type EffectFact       struct { Service, Field, Resolved string }
 
 ## 11. Risk / upstream-fidelity
 
-- **Probe (before coding, like the D1 lever):** confirm at compose-go **v2.11.0**
-  that a `WithInterpolation(false)` load yields a config dict in which `${VAR}`
-  references survive as literals AND that `template.ExtractVariables` enumerates
-  them with enough field-path information to map back to load₁. If field paths are
-  not recoverable from `ExtractVariables` alone, fall back to walking the load₂
-  dict ourselves (still using `template` to tokenize each string field). Record
-  findings in `.claude/artifacts/`.
+- **Probe — DONE (2026-06-16):** verified at compose-go **v2.11.0**
+  (`.claude/artifacts/compose-go-provenance-probe.md`). Findings that shaped §6:
+  the mechanism is a **single raw load** (`loader.LoadConfigFiles` →
+  `loader.LoadModelWithContext{SkipInterpolation,…}`) + a dict walk + per-leaf
+  `template.SubstituteWithOptions(…, template.WithoutLogging)`;
+  `template.ExtractVariables` returns variable NAMES only (no field paths → we
+  walk the dict); a two-load diff is WRONG (the normalization-on-interpolation
+  trap — interpolation expands `ports`/list-`environment` into structs); and C
+  requires the existing `cli.WithoutEnvironmentResolution` lever to keep inline
+  `environment:` separable from `env_file:`.
 - Add to the v1 spec §10 bump checklist: on a compose-go bump, re-confirm the
   non-interpolated-load + `ExtractVariables` behavior and the `dotenv.Parse`
   surface.
