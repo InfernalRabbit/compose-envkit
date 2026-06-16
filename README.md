@@ -205,11 +205,12 @@ compose-envkit/
 
 ## Documentation
 
-- [`docs/cenvkit.md`](docs/cenvkit.md) — **the canonical reference — start
-  here**: install (both modes), the two layers, every command, the `env-debug`
-  provenance modes, and the behavior contracts (D1 missing-`env_file:`, variable
-  precedence, the `env_file:`-path model, `COMPOSE_DEPTH` accepted-but-ignored,
-  no over-discovery).
+- [`docs/guide.md`](docs/guide.md) — **the full user guide — start here**:
+  install, the env-chain (Layer 1/2), every command with worked examples,
+  monorepos, `env-debug` provenance, CI, the behavior contracts, and
+  troubleshooting.
+- [`docs/cenvkit.md`](docs/cenvkit.md) — the one-page reference (commands +
+  behavior contracts at a glance).
 - [`docs/superpowers/`](docs/superpowers/) — the design spec and implementation
   plans (historical record).
 - [`AGENTS.md`](AGENTS.md) — integration guide for AI agents.

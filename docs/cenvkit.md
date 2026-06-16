@@ -5,6 +5,9 @@ on **Docker's own compose loader** (`github.com/compose-spec/compose-go/v2`,
 pinned `v2.11.0`). It assembles `COMPOSE_ENV_FILES` from the real, include-aware,
 interpolated compose model and then `exec`s `docker compose`.
 
+> This is the **one-page reference**. For the full end-to-end guide (setup,
+> monorepos, CI, troubleshooting, worked examples), see [`guide.md`](guide.md).
+
 It closes the same gap the original POSIX-`sh` kit did — a service `env_file:`
 populates the *container* environment but is invisible to compose-time `${VAR}`
 interpolation — but by importing the real loader rather than a hand-rolled
