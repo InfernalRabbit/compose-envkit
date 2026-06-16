@@ -271,7 +271,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/compose-envkit/compose-envkit/internal/engine"
+	"github.com/InfernalRabbit/compose-envkit/internal/engine"
 )
 
 func writeF(t *testing.T, dir, rel, body string) string {
@@ -355,7 +355,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/compose-envkit/compose-envkit/internal/provenance"
+	"github.com/InfernalRabbit/compose-envkit/internal/provenance"
 )
 
 type ProvFile struct{ Path, Layer string }

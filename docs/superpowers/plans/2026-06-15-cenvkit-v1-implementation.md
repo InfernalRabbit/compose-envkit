@@ -21,7 +21,7 @@
 
 ## Conventions & decisions baked into this plan
 
-- **Module path:** `MODULE = github.com/compose-envkit/compose-envkit` (no git remote is configured yet; this only affects the public `go install …@latest` path, not local or vendored use). **Confirm with the maintainer before Task 1**; if it changes, it is a single `go mod init` argument and the `cmd/cenvkit/main.go` import path in Task 6. Everything else is module-relative.
+- **Module path:** `MODULE = github.com/InfernalRabbit/compose-envkit` (no git remote is configured yet; this only affects the public `go install …@latest` path, not local or vendored use). **Confirm with the maintainer before Task 1**; if it changes, it is a single `go mod init` argument and the `cmd/cenvkit/main.go` import path in Task 6. Everything else is module-relative.
 - **compose-go pin:** EXACTLY `v2.11.0` (the `/v2` module — never the transitive v1.x). Verified present via `go doc` + live `LoadProject` probe (see D1 artifact). Bump only deliberately + re-run acceptance (spec §10).
 - **Engine seam (spec §3, D3):** `internal/engine` is the ONLY package that imports compose-go. `chain`/`debug`/`cmd`/`bootstrap` import ZERO compose-go. `go list` (NO `-deps`; first-party packages only) is asserted in Task 3 to lock this.
 - **D1 (user-confirmed):** lenient at assembly, upstream at runtime. The enumeration load uses `cli.WithoutEnvironmentResolution` so a missing *required* env_file does not abort the load; the engine then `os.Stat`-filters non-existent paths out of `COMPOSE_ENV_FILES`; the real `docker compose` run (loaded WITHOUT the lever) re-enforces `required:`.
@@ -90,13 +90,13 @@ T1 scaffold ───┬──> T2 chain ──────┐
 **Files:**
 - Create: `go.mod`, `cmd/cenvkit/main.go`
 
-- [ ] **Step 1: Confirm the module path** (one-time, with maintainer). Default `github.com/compose-envkit/compose-envkit`. Used verbatim below as `MODULE`.
+- [ ] **Step 1: Confirm the module path** (one-time, with maintainer). Default `github.com/InfernalRabbit/compose-envkit`. Used verbatim below as `MODULE`.
 
 - [ ] **Step 2: Initialize the module and add cobra**
 
 ```bash
 cd /Users/infernal_rabbit/Workflow/Big/compose-envkit
-go mod init github.com/compose-envkit/compose-envkit
+go mod init github.com/InfernalRabbit/compose-envkit
 go get github.com/spf13/cobra@latest
 ```
 Expected: `go.mod` created with `go 1.26` (or current toolchain) and a `require github.com/spf13/cobra` line.
@@ -672,7 +672,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/compose-envkit/compose-envkit/internal/engine"
+	"github.com/InfernalRabbit/compose-envkit/internal/engine"
 )
 
 func write(t *testing.T, dir, rel, body string) string {

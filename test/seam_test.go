@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/compose-envkit/compose-envkit/internal/chain"
-	"github.com/compose-envkit/compose-envkit/internal/engine"
-	"github.com/compose-envkit/compose-envkit/internal/envfiles"
+	"github.com/InfernalRabbit/compose-envkit/internal/chain"
+	"github.com/InfernalRabbit/compose-envkit/internal/engine"
+	"github.com/InfernalRabbit/compose-envkit/internal/envfiles"
 )
 
 // TestSeam_ChainToEngine feeds chain.Resolve() output directly into

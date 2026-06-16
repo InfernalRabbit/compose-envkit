@@ -25,7 +25,7 @@ interpolation that depends on a service `env_file:`.
 ## How to run it
 
 ```sh
-go install github.com/compose-envkit/compose-envkit/cmd/cenvkit@latest
+go install github.com/InfernalRabbit/compose-envkit/cmd/cenvkit@latest
 
 cenvkit compose <args>     # assemble COMPOSE_ENV_FILES, exec `docker compose <args>`
 cenvkit env-files          # print the resolved chain, one path per line

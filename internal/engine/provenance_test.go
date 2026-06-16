@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/compose-envkit/compose-envkit/internal/engine"
-	"github.com/compose-envkit/compose-envkit/internal/provenance"
+	"github.com/InfernalRabbit/compose-envkit/internal/engine"
+	"github.com/InfernalRabbit/compose-envkit/internal/provenance"
 )
 
 func writeF(t *testing.T, dir, rel, body string) string {

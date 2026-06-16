@@ -237,7 +237,7 @@ confirm none assert depth *behavior*.)
 
 ## 6. Distribution (dual-mode)
 
-- **Install:** `go install github.com/<org>/compose-envkit/cmd/cenvkit@latest`;
+- **Install:** `go install github.com/InfernalRabbit/compose-envkit/cmd/cenvkit@latest`;
   a Homebrew tap; prebuilt binaries per-OS via goreleaser on GH releases;
   `go run …/cmd/cenvkit@latest …` for ephemeral (npx-like) use.
 - **Vendor:** commit the Go module into the project + a small POSIX `./cenvkit`

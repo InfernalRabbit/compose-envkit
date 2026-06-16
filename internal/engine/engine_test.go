@@ -7,7 +7,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/compose-envkit/compose-envkit/internal/engine"
+	"github.com/InfernalRabbit/compose-envkit/internal/engine"
 )
 
 func write(t *testing.T, dir, rel, body string) string {

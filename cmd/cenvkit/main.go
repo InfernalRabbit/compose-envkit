@@ -12,11 +12,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/compose-envkit/compose-envkit/internal/bootstrap"
-	"github.com/compose-envkit/compose-envkit/internal/chain"
-	"github.com/compose-envkit/compose-envkit/internal/engine"
-	"github.com/compose-envkit/compose-envkit/internal/envfiles"
-	"github.com/compose-envkit/compose-envkit/internal/provenance"
+	"github.com/InfernalRabbit/compose-envkit/internal/bootstrap"
+	"github.com/InfernalRabbit/compose-envkit/internal/chain"
+	"github.com/InfernalRabbit/compose-envkit/internal/engine"
+	"github.com/InfernalRabbit/compose-envkit/internal/envfiles"
+	"github.com/InfernalRabbit/compose-envkit/internal/provenance"
 )
 
 // version is overridden at release time via -ldflags "-X main.version=...".

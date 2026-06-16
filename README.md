@@ -27,8 +27,8 @@ v2.11.0). Two distribution modes:
 
 ```sh
 # Installed (recommended)
-go install github.com/compose-envkit/compose-envkit/cmd/cenvkit@latest
-# or ephemeral: go run github.com/compose-envkit/compose-envkit/cmd/cenvkit@latest <args>
+go install github.com/InfernalRabbit/compose-envkit/cmd/cenvkit@latest
+# or ephemeral: go run github.com/InfernalRabbit/compose-envkit/cmd/cenvkit@latest <args>
 ```
 
 In your project:

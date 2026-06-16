@@ -41,9 +41,9 @@ real `docker compose` then loads as its interpolation context.
 **Installed** (recommended):
 
 ```sh
-go install github.com/compose-envkit/compose-envkit/cmd/cenvkit@latest
+go install github.com/InfernalRabbit/compose-envkit/cmd/cenvkit@latest
 # ephemeral, no install:
-go run github.com/compose-envkit/compose-envkit/cmd/cenvkit@latest <args>
+go run github.com/InfernalRabbit/compose-envkit/cmd/cenvkit@latest <args>
 ```
 
 **Vendored** (commit the Go module + the POSIX `cenvkit` shim into your project;

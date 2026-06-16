@@ -11,7 +11,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/template"
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/compose-envkit/compose-envkit/internal/provenance"
+	"github.com/InfernalRabbit/compose-envkit/internal/provenance"
 )
 
 // ProvFile is one ordered COMPOSE_ENV_FILES entry tagged with its chain layer.

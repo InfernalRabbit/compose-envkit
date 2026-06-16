@@ -6,7 +6,7 @@ metadata:
 ---
 
 Two test files coexist in `internal/engine/`:
-- `engine_test.go`: `package engine_test` — imports `github.com/compose-envkit/compose-envkit/internal/engine`; tests exported API (`engine.New()`, `engine.Input`, `engine.Result`).
+- `engine_test.go`: `package engine_test` — imports `github.com/InfernalRabbit/compose-envkit/internal/engine`; tests exported API (`engine.New()`, `engine.Input`, `engine.Result`).
 - `discover_test.go`: `package engine` — calls unexported `resolveComposeFiles` directly.
 
 Go allows both `package foo` and `package foo_test` files in the same directory. The two-file split is intentional: black-box tests exercise the public contract; white-box tests verify the internal gate logic.

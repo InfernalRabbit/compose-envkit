@@ -41,14 +41,14 @@ compose-time interpolation — last-wins.
 **Installed (recommended).** Needs a Go toolchain:
 
 ```sh
-go install github.com/compose-envkit/compose-envkit/cmd/cenvkit@latest
+go install github.com/InfernalRabbit/compose-envkit/cmd/cenvkit@latest
 cenvkit version
 ```
 
 **Ephemeral** (no install — npx-style):
 
 ```sh
-go run github.com/compose-envkit/compose-envkit/cmd/cenvkit@latest env-files
+go run github.com/InfernalRabbit/compose-envkit/cmd/cenvkit@latest env-files
 ```
 
 **Vendored** (commit the module + a POSIX `cenvkit` shim into your repo; needs a

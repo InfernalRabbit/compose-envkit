@@ -1,4 +1,4 @@
-module github.com/compose-envkit/compose-envkit
+module github.com/InfernalRabbit/compose-envkit
 
 go 1.26.3
 

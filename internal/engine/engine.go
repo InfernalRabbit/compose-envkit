@@ -10,7 +10,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/cli"
 
-	"github.com/compose-envkit/compose-envkit/internal/provenance"
+	"github.com/InfernalRabbit/compose-envkit/internal/provenance"
 )
 
 // Input describes one Layer-2 resolution request.
