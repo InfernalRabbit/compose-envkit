@@ -1,4 +1,4 @@
-# cenvkit — the Go CLI (v1)
+# cenvkit — the Go CLI
 
 `cenvkit` is the current implementation of compose-envkit: a small Go CLI built
 on **Docker's own compose loader** (`github.com/compose-spec/compose-go/v2`,
@@ -64,17 +64,32 @@ go build -o .cenvkit.bin ./cmd/cenvkit   # .cenvkit.bin is gitignored
 |---|---|
 | `cenvkit compose <args>` | assemble the chain, `exec docker compose <args>` (the core) |
 | `cenvkit env-files` | print the resolved `COMPOSE_ENV_FILES` chain, one path per line |
-| `cenvkit env-debug [--chain\|--files\|--value --var V\|--trace --var V\|--diff\|--effective]` | inspect the chain |
+| `cenvkit env-debug [--trace --var V\|--effective [--service S]\|--value --var V\|--chain\|--files] [--json]` | inspect the env chain with provenance (in-process, no daemon) |
 | `cenvkit validate [--all]` | `docker compose config -q`; `--all` validates dev AND prod |
 | `cenvkit init` | seed `.X` from `example.X` (**no-clobber**), fan out one directory level |
 | `cenvkit version` | print the version |
 
 Global: `--project-dir <dir>` (default: current directory).
 
-`env-debug` notes: `--value`/`--trace` read raw last-wins literals from the
-resolved files (`--value` is scoped to the Layer-1 chain; `--trace` spans the
-merged set). They do **not** expand `${VAR:-default}` — for fully-resolved values
-use `--effective` (which runs `docker compose config`).
+`env-debug` is **provenance-backed and daemon-free** (v2) — it loads the model
+in-process via compose-go, with NO `docker compose` shell-out:
+
+- `--trace --var V` — V's winning value, the file that set it, the shadowed files
+  (in chain order), and where `${V}` took effect (service/field → resolved value).
+  `[A + B-lite]`
+- `--effective [--service S]` — each service's effective environment with the
+  source of every value (`env_file:` vs inline `environment:`). `[C]`
+- `--value --var V` — V's winning value (one line).
+- `--chain` (default) — the Layer-1 chain files (secrets last); `--files` — the
+  full merged `COMPOSE_ENV_FILES`.
+- `--json` — the structured provenance `Report` for any mode (tooling/CI).
+
+Effects are reported for **service fields only** (`services.<name>.<field>`);
+`${VAR}` in top-level `networks:`/`volumes:`/`x-*` is out of scope this increment
+(the var still appears in `--trace`'s chain attribution if it is a chain key).
+The v1 `--diff` flag is **removed** (superseded by `--trace` + `--effective`), and
+`--effective` no longer shells out to `docker compose config`. Provenance uses
+compose-go's own `dotenv` + `template` packages (docker-compose parity).
 
 ## Behavior contracts (what to rely on)
 
@@ -114,7 +129,8 @@ use `--effective` (which runs `docker compose config`).
 
 - `cmd/cenvkit` — cobra CLI. `internal/chain` — Layer 1. `internal/engine` — Layer
   2 (the **only** package importing compose-go; a CI seam check enforces this).
-  `internal/envfiles` — merge/order/dedup. `internal/debug` — env-debug.
+  `internal/envfiles` — merge/order/dedup. `internal/provenance` — env-debug
+  provenance model + human/JSON render (pure Go; `engine` imports it).
   `internal/bootstrap` — `cenvkit init`.
 - Upstream-first: compose-go is the source of truth for compose semantics; the
   version is pinned and bumped deliberately (re-run acceptance on a bump — see the

@@ -6,6 +6,21 @@ to [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+### rich provenance — `env-debug` v2
+
+`cenvkit env-debug` is now **provenance-backed and daemon-free**: it loads the
+compose model in-process (compose-go) and answers, for any variable, *which file
+set the winning value, what it shadowed, and where `${VAR}` took effect*
+(service/field → resolved value), and for any service, *its effective environment
+with the source of each value* (`env_file:` vs inline `environment:`). Human
+output by default; `--json` emits the structured `Report` for tooling/CI. This
+supersedes v1's raw `--value`/`--trace`; the `--diff` flag is **removed**
+(superseded by `--trace` + `--effective`); and `--effective` no longer shells out
+to `docker compose config`. Parsing uses compose-go's own `dotenv` + `template`
+packages (docker-compose parity); compose-go stays isolated behind
+`internal/engine` (CI seam check). Acceptance grew to **68** smoke-monorepo
+assertions. Full reference: [`docs/cenvkit.md`](docs/cenvkit.md).
+
 ### cenvkit — Go rewrite (v1)
 
 The engine is rewritten as a Go CLI, **`cenvkit`**, built on Docker's own compose

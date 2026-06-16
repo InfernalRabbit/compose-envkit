@@ -1,6 +1,6 @@
 # cenvkit v2 — rich provenance (`env-debug`) design
 
-Status: **approved direction (brainstorming), 2026-06-16.** Builds on the shipped
+Status: **implemented (v2), 2026-06-16.** Builds on the shipped
 v1 (`docs/superpowers/specs/2026-06-15-cenvkit-go-rewrite-design.md`, §11 deferred
 "rich mode"). This spec covers the **provenance** increment only; the other two
 deferred items (rendered-compose artifact; two-pass `env_file:`-path resolution)
