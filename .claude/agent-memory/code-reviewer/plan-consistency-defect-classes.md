@@ -31,6 +31,17 @@ prose dependency graph or the layer-scope of CLI subcommands.
    can flip a smoke assertion if a Layer-2 file sets a queried var. Cross-check
    [[carried-bug-classes-cenvkit]] secret-wipe class too: a secret var must not
    be re-sourced from Layer-2.
+   RECURRED in the v2 rich-provenance plan
+   (`docs/superpowers/plans/2026-06-16-cenvkit-rich-provenance.md`): T2 builds
+   `Report.Vars` (the A phase) from the FULL ordered `EnvFiles` (Layer-1 `pf` +
+   Layer-2 `er.EnvFiles`), and T3 `RenderHuman`'s `Value` case prints
+   `r.Vars[o.Value].Value`. So `--value` now reflects Layer-2 last-wins —
+   shadows Layer-1 and can surface a secret, regressing smoke.sh:218 /
+   `TestEnvDebug_Value` (the existing test passes only by luck: its fixture has
+   no compose file → no Layer-2). Fix: `--value` must read a Layer-1-only trace
+   (drop Layer-2 sources before computing the winner for `--value`), OR the spec
+   must explicitly redefine `--value` semantics and the acceptance test must be
+   updated with lead sign-off. See [[env-debug-layer-scope-per-mode]].
 
 3. **chain↔engine COMPOSE_FILE seam.** `chain.parseDotEnv` does NOT interpolate
    `${...}`, so `cr.Vars["COMPOSE_FILE"]` reaches the engine/gate with tokens

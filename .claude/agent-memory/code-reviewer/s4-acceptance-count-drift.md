@@ -27,3 +27,14 @@ compose-go (the renamed file is not in the root include:), so the simple
 "inversion = same count" arithmetic is itself wrong — the delta needs a concrete
 per-scenario recount, not a hand-wave. Related: [[glob-vs-include-acceptance-class]],
 [[plan-consistency-defect-classes]].
+
+**RECURS in v2 provenance plan (2026-06-16):** T4 Step 2 (plan line 706) again
+DEFERS the recount verbatim ("record the new exact acceptance total (was 60) and
+pin it. Lead signs off"). The acceptance file now pins the count in the HEADER in
+two literal spots — `test/cenvkit-acceptance_test.go:1` ("60 assertions after S4
+recount") and `:17` ("exactly 60 smoke-monorepo assertions"), plus `:18` ("NOT
+counted in 60") and per-scenario `(N assertions)` annotations. T4 never names
+these header sites as edit targets → real consistency drift, finding real=true.
+Arithmetic nuance: it is NOT "60 + new". T4 Step 1 says `--value SMOKE_VAL`
+*replaces* the v1 raw assertion (existing scenario 5.6, file lines 495-507), so
+the new total is add-AND-replace — a per-scenario audit, not "60 + count(new)".
