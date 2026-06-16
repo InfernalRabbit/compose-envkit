@@ -9,6 +9,8 @@ import (
 	"sort"
 
 	"github.com/compose-spec/compose-go/v2/cli"
+
+	"github.com/compose-envkit/compose-envkit/internal/provenance"
 )
 
 // Input describes one Layer-2 resolution request.
@@ -36,6 +38,7 @@ type Result struct {
 // Engine is the seam. One real impl over compose-go; trivially fakeable in tests.
 type Engine interface {
 	Resolve(ctx context.Context, in Input) (Result, error)
+	Provenance(ctx context.Context, in ProvInput) (provenance.Report, error)
 }
 
 type composeEngine struct{}
