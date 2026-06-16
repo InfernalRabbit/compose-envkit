@@ -89,9 +89,10 @@ type ServiceEnv struct {
 	Entries []EnvEntry `json:"entries"`
 }
 type Report struct {
-	Files    []string            `json:"files"`              // COMPOSE_ENV_FILES order
-	Vars     map[string]VarTrace `json:"vars"`               // A + B-lite
-	Services []ServiceEnv        `json:"services,omitempty"` // C (empty in chain-only mode)
+	Files      []string            `json:"files"`              // full merged COMPOSE_ENV_FILES (Layer-1 + Layer-2)
+	ChainFiles []string            `json:"chain_files"`        // Layer-1-only subset, chain order (engine fills from in.EnvFiles where Layer=="layer1"); --chain renders this
+	Vars       map[string]VarTrace `json:"vars"`               // A + B-lite
+	Services   []ServiceEnv        `json:"services,omitempty"` // C (empty in chain-only mode)
 }
 ```
 
@@ -193,8 +194,8 @@ func RenderHuman(w io.Writer, r Report, o HumanOpts) {
 		for _, f := range r.Files {
 			fmt.Fprintln(w, f)
 		}
-	default: // Chain == default view
-		for _, f := range r.Files {
+	default: // Chain == default view: Layer-1 only (v1 semantics; secrets last WITHIN Layer-1)
+		for _, f := range r.ChainFiles {
 			fmt.Fprintln(w, f)
 		}
 	}
