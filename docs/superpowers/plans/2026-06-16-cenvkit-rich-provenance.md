@@ -296,8 +296,11 @@ services:
       TIER: "${COMPOSE_ENV}"
     env_file: [./web.env]
 `)
-	web := writeF(t, dir, "web.env", "WEB_ONLY=yes\nTIER=fromfile\n")
-	env := []string{"WEB_PORT=8080", "COMPOSE_ENV=staging"}
+	// WEB_PORT lives ONLY in the Layer-2 env_file (NOT in the env slice), so the
+	// effect assertion below is RED on the pre-fix Layer-1-only mapping (which
+	// never saw WEB_PORT) and GREEN once the merged-env fix lands.
+	web := writeF(t, dir, "web.env", "WEB_ONLY=yes\nTIER=fromfile\nWEB_PORT=8080\n")
+	env := []string{"COMPOSE_ENV=staging"}
 
 	rep, err := engine.New().Provenance(context.Background(), engine.ProvInput{
 		ProjectDir: dir,
@@ -308,7 +311,9 @@ services:
 		t.Fatalf("Provenance: %v", err)
 	}
 
-	// B-lite: WEB_PORT effect on web.ports[0] resolves to 8080:80
+	// B-lite (Layer-2-only var effect): WEB_PORT is set ONLY in web.env, yet its
+	// ${WEB_PORT} effect on web.ports[0] must still resolve to 8080:80 — proving
+	// the interpolation mapping reads the MERGED COMPOSE_ENV_FILES, not in.Env alone.
 	wp := rep.Vars["WEB_PORT"]
 	if len(wp.Effects) == 0 || wp.Effects[0].Service != "web" || wp.Effects[0].Resolved != "8080:80" {
 		t.Fatalf("WEB_PORT effect wrong: %+v", wp.Effects)
@@ -330,6 +335,7 @@ services:
 }
 ```
 > qa: add `findService(rep, name)` / `entry(se, key)` test helpers in the same file (return the `provenance.ServiceEnv` / `provenance.EnvEntry`; `t.Fatal` if absent). Also add a chain-only case: no compose file in `dir` → `Provenance` returns a `Report` with `Vars` (A) populated and empty `Services`/`Effects`, no error (gate via `HasComposeFileEnv`).
+> qa (Layer-2-only var effect — the RED guard for findings [0]/[2]): the test above is deliberately authored so `WEB_PORT` is sourced ONLY from the Layer-2 `web.env` (env_file) and is ABSENT from the `env` slice. On pre-fix code (mapping built from `in.Env` alone) the `${WEB_PORT}` effect resolves wrong (no value → empty/`:80`), so `Effects[0].Resolved == "8080:80"` FAILS; once the merged-env fix lands it PASSES. This is the temp-revert RED guard that the gap can no longer hide behind a pre-injected env. Keep `WEB_PORT` out of `env` — do not "helpfully" re-add it.
 
 - [ ] **Step 2: Run — verify FAIL** (`undefined: engine.ProvInput / Provenance`)
 
@@ -361,7 +367,14 @@ type ProvInput struct {
 }
 
 // parseDotEnv uses compose-go's own dotenv parser (docker-compose parity).
-func parseDotEnv(path string) (map[string]string, error) { return dotenv.ReadFile(path, nil) }
+// lookup lets in-file ${VAR} refs that the chain provides resolve quietly
+// (mirrors the WithoutLogging discipline of the B-lite Substitute path). A
+// genuinely-unset external ${VAR} inside an env_file STILL warns — that is
+// correct docker-compose parity (last-wins COMPOSE_ENV_FILES); only
+// chain-provided vars are silenced.
+func parseDotEnv(path string, lookup dotenv.LookupFn) (map[string]string, error) {
+	return dotenv.ReadFile(path, lookup)
+}
 
 func envSliceToMap(env []string) map[string]string {
 	m := make(map[string]string, len(env))
@@ -382,9 +395,6 @@ func indexByte(s string, b byte) int {
 }
 
 func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenance.Report, error) {
-	chainEnv := envSliceToMap(in.Env)
-	mapping := template.Mapping(func(k string) (string, bool) { v, ok := chainEnv[k]; return v, ok })
-
 	configs := in.ConfigFiles
 	if len(configs) == 0 {
 		configs = resolveComposeFiles(in.ProjectDir, in.Env)
@@ -392,11 +402,39 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 
 	rep := provenance.Report{Vars: map[string]provenance.VarTrace{}}
 
+	// --- merged interpolation env (mirror docker compose: read COMPOSE_ENV_FILES
+	// before interpolation). Build chainEnv = union of every EnvFiles entry in
+	// declaration order (later file wins, so Layer-2 over Layer-1), THEN overlay
+	// in.Env (OS / Layer-1 chain seed) LAST so the OS/shell value wins — parity
+	// with chain.go's OS-wins merge. We capture each file's parsed map once here
+	// and REUSE it for the A-attribution loop below (no double-parse).
+	chainEnv := map[string]string{}
+	parsed := make([]map[string]string, len(in.EnvFiles)) // parsed[i] aligns with in.EnvFiles[i]
+	lookup := dotenv.LookupFn(func(k string) (string, bool) { v, ok := chainEnv[k]; return v, ok })
+	for i, f := range in.EnvFiles {
+		// First pass without lookup (lookup is built incrementally); refs that
+		// resolve later still win via the overlay. Practical chains rarely depend
+		// on cross-file ${VAR} inside an env_file; the C/B-lite paths reparse with
+		// the full lookup below.
+		if m, err := parseDotEnv(f.Path, lookup); err == nil {
+			parsed[i] = m
+			for k, v := range m {
+				chainEnv[k] = v // later file in declaration order wins
+			}
+		}
+	}
+	for k, v := range envSliceToMap(in.Env) {
+		chainEnv[k] = v // OS / Layer-1 seed wins last
+	}
+	// mapping (B-lite) reads the merged effective env so "${WEB_PORT:-0}:80"
+	// resolves to the real value (e.g. "18080:80"), not the :-0 default.
+	mapping := template.Mapping(func(k string) (string, bool) { v, ok := chainEnv[k]; return v, ok })
+
 	// --- A: chain attribution over the ordered merged COMPOSE_ENV_FILES ---
-	for _, f := range in.EnvFiles {
+	for i, f := range in.EnvFiles {
 		rep.Files = append(rep.Files, f.Path)
-		m, err := parseDotEnv(f.Path)
-		if err != nil {
+		m := parsed[i]
+		if m == nil {
 			continue // skip missing (parity)
 		}
 		src := provenance.Source{File: f.Path, Layer: f.Layer}
@@ -411,15 +449,46 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 		}
 	}
 
+	// --- A overlay: shell environment is the FINAL last-wins source, so each
+	// VarTrace's Winner/Value/Overridden stay mutually consistent with what
+	// compose actually interpolates (chainEnv overlays files with OS env). When
+	// the env overrides a file, the file becomes Overridden and the winner
+	// becomes (environment); a shell-only var (no chain file set it) is attributed
+	// to (environment) too. (chainEnv mixes genuine OS exports with file vars
+	// promoted into rep.Vars; if cmd later wants to distinguish true-shell-only
+	// keys it can pass the raw os.Environ() set in ProvInput — but at minimum the
+	// reported Value must reflect the merged effective env, not the raw file literal.)
+	envSrc := provenance.Source{File: "(environment)", Layer: "environment"}
+	for k, v := range chainEnv {
+		vt := rep.Vars[k]
+		vt.Name = k
+		if vt.Winner.File != "" && vt.Value != v {
+			// a file set it but the shell overrides → shadow the file winner
+			vt.Overridden = append(vt.Overridden, vt.Winner)
+			vt.Winner, vt.Value = envSrc, v
+		} else if vt.Winner.File == "" {
+			// shell-only var (no chain file set it)
+			vt.Winner, vt.Value = envSrc, v
+		}
+		rep.Vars[k] = vt
+	}
+
 	// chain-only mode: no compose file => return A only.
 	if len(configs) == 0 {
 		return rep, nil
 	}
 
 	// --- C: per-service env with sources (D1 lever keeps environment inline-only) ---
+	// Feed the SAME merged env (sorted "K=V") to cli.WithEnv so inline
+	// environment values like "${WEB_PORT:-0}" resolve to the real chain value,
+	// consistent with the B-lite mapping above (was Layer-1-only via in.Env).
+	mergedEnv := make([]string, 0, len(chainEnv))
+	for _, k := range sortedKeys(chainEnv) {
+		mergedEnv = append(mergedEnv, k+"="+chainEnv[k])
+	}
 	opts, err := cli.NewProjectOptions(configs,
 		cli.WithWorkingDirectory(in.ProjectDir),
-		cli.WithEnv(in.Env),
+		cli.WithEnv(mergedEnv),
 		cli.WithProfiles(in.Profiles),
 		cli.WithResolvedPaths(true),
 		cli.WithInterpolation(true),
@@ -442,7 +511,7 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 		final := map[string]string{}
 		source := map[string]provenance.Source{}
 		for _, ef := range svc.EnvFiles {
-			m, perr := parseDotEnv(ef.Path)
+			m, perr := parseDotEnv(ef.Path, lookup)
 			if perr != nil {
 				continue
 			}
@@ -551,8 +620,12 @@ func walkDict(node any, path string, fn func(path, leaf string)) {
 	}
 }
 
-// splitServiceField turns "services.web.ports[0]" into ("web", "ports[0]", true);
-// returns ok=false for paths not under a concrete service field.
+// splitServiceField turns "services.web.ports[0]" into ("web", "ports[0]", true).
+// It INTENTIONALLY returns ok=false for non-service paths (top-level
+// networks/volumes/configs/secrets/x-*); those ${VAR} effects are out of scope
+// for B-lite (see spec §2/§8) and are deliberately dropped, not a bug. Such a
+// var still appears in A (chain attribution) if it is a COMPOSE_ENV_FILES key;
+// only its Effects entry is omitted.
 func splitServiceField(path string) (service, field string, ok bool) {
 	const p = "services."
 	if len(path) <= len(p) || path[:len(p)] != p {
@@ -581,7 +654,7 @@ Run:
 ```bash
 go test ./internal/engine/ -run Provenance -v
 # seam: provenance must NOT import compose-go; engine still the only importer
-MOD=$(go list -m); go list -f '{{.ImportPath}} {{join .Imports " "}}' ./... | grep -v "^$MOD/internal/engine " | grep 'compose-spec/compose-go' && echo LEAK || echo "seam OK"
+MOD=$(go list -m); go list -f '{{.ImportPath}} {{join .Imports " "}}' ./... | grep -v "^$MOD/internal/engine " | grep 'compose-spec/compose-go' && { echo LEAK; exit 1; } || echo "seam OK"
 go vet ./internal/engine/ ./internal/provenance/ && gofmt -l internal/engine internal/provenance
 ```
 Expected: PASS · `seam OK` · clean. (If `internal/provenance` shows a compose-go import, a type leaked — move it.)
@@ -600,8 +673,8 @@ Expected: PASS · `seam OK` · clean. (If `internal/provenance` shows a compose-
 ```go
 func newEnvDebugCmd() *cobra.Command {
 	var (
-		mChain, mDiff, mEffective, mFiles, mTrace, mValue, jsonOut bool
-		varName, service                                           string
+		mChain, mEffective, mFiles, mTrace, mValue, jsonOut bool
+		varName, service                                    string
 	)
 	c := &cobra.Command{
 		Use:   "env-debug",
@@ -648,12 +721,10 @@ func newEnvDebugCmd() *cobra.Command {
 				Trace: pick(mTrace, varName), Value: pick(mValue, varName),
 				Effective: mEffective, Service: service, Chain: mChain, Files: mFiles,
 			})
-			_ = mDiff // --diff retained as an alias of --effective for back-compat
 			return nil
 		},
 	}
 	c.Flags().BoolVar(&mChain, "chain", false, "Layer-1 chain files")
-	c.Flags().BoolVar(&mDiff, "diff", false, "alias of --effective (back-compat)")
 	c.Flags().BoolVar(&mEffective, "effective", false, "per-service env with sources")
 	c.Flags().BoolVar(&mFiles, "files", false, "full COMPOSE_ENV_FILES list")
 	c.Flags().BoolVar(&mTrace, "trace", false, "trace --var: winner, overridden, effects")
@@ -682,11 +753,11 @@ Run:
 ```bash
 go build ./... && go vet ./... && gofmt -l .
 ( cd examples/monorepo && cp example.env .env && cp example.dev.env .dev.env && \
-  go run ../../cmd/cenvkit env-debug --trace WEB_PORT && \
+  go run ../../cmd/cenvkit env-debug --trace --var WEB_PORT && \
   go run ../../cmd/cenvkit env-debug --effective --service web --json ; \
   rm -f .env .dev.env )
 ```
-Expected: clean build; `--trace WEB_PORT` shows winner + a `web` effect; `--effective --service web --json` emits valid JSON. (The `cp`/`rm` seeds Layer-1 in the fixture without dirtying tracked files — or use a temp copy.)
+Expected: clean build; `--trace --var WEB_PORT` shows winner + a `web` effect; `--effective --service web --json` emits valid JSON. (The `cp`/`rm` seeds Layer-1 in the fixture without dirtying tracked files — or use a temp copy.)
 
 - [ ] **Step 4: Commit** — `git add cmd/cenvkit/main.go internal/debug/ && git commit -m "feat(cmd): env-debug backed by provenance (+ --json/--service); drop v1 raw debug"`
 
@@ -697,18 +768,23 @@ Expected: clean build; `--trace WEB_PORT` shows winner + a `web` effect; `--effe
 **Owner:** qa-engineer. **Depends on:** T3.
 
 - [ ] **Step 1: Add provenance acceptance tests** in `test/cenvkit-acceptance_test.go`, driving the built binary against a staged `examples/monorepo` (reuse `stageMonorepo(t)`):
-  - `env-debug --trace WEB_PORT` → output contains the winning `.web.env` path AND a `service=web` effect with the resolved port. **[A + B-lite]**
-  - `env-debug --trace WEB_PORT --json` → parses; assert `Vars.WEB_PORT.winner.layer == "layer2"` and a non-empty `effects`. (Use `encoding/json` into a minimal struct.)
-  - `env-debug --effective --service web --json` → parses; assert an entry whose `source.layer` is `env_file` or `environment`. **[C]**
-  - `env-debug --value SMOKE_VAL` → winning value (replaces the v1 raw assertion).
-  - **W3 (provenance form):** a var set in both `.secrets.env` and an earlier Layer-1 file → `--trace` winner is `.secrets.env` (within-chain secrets-last).
-  - Chain-only: a dir with no compose file → `env-debug --trace X --json` succeeds, `services` empty.
-- [ ] **Step 2: Count** — these are NEW assertions; record the new exact acceptance total (was 60) and pin it. Lead signs off. Run both modes:
+  - `env-debug --trace --var WEB_PORT` → output contains the winning `.web.env` path AND a `service=web` effect with the resolved port. **[A + B-lite]** (2 assertions)
+  - `env-debug --trace --var WEB_PORT --json` → parses; assert `Vars.WEB_PORT.winner.layer == "layer2"` and a non-empty `effects`. (Use `encoding/json` into a minimal struct.) (2 assertions)
+  - `env-debug --effective --service web --json` → parses; assert an entry whose `source.layer` is `env_file` or `environment`. **[C]** (1 assertion)
+  - `env-debug --value --var SMOKE_VAL` → winning value (**replaces** the existing v1 raw `--value` assertion — net 0 on count).
+  - **W3 (provenance form):** a var set in both `.secrets.env` and an earlier Layer-1 file → `--trace --var ...` winner is `.secrets.env` (within-chain secrets-last). (1 assertion)
+  - Chain-only: a dir with no compose file → `env-debug --trace --var X --json` succeeds, `services` empty. (2 assertions)
+- [ ] **Step 2: Recount (concrete target = 68)** — these provenance assertions grow the smoke-monorepo total **from 60 to 68**. Derivation: baseline **60** + `--trace --var WEB_PORT` human (2) + `--trace --var WEB_PORT --json` (2) + `--effective --service web --json` (1) + W3-winner (1) + chain-only (2) + `--value --var SMOKE_VAL` (REPLACES the existing v1 raw `--value` assertion → net **0**) = **68**. This is an add-AND-replace recount, NOT pure addition — the `--value --var SMOKE_VAL` assertion supersedes the existing v1 raw assertion at `test/cenvkit-acceptance_test.go` (TestEnvDebug_Value), so it does not count as net-new. Audit the exact per-scenario total to confirm 68, then in the **Step 3 commit** update every hardcoded count site in `test/cenvkit-acceptance_test.go` to 68:
+  - lines 1–2 header ("60 assertions after S4 recount" → "68 …"),
+  - line 17 ("exactly 60 smoke-monorepo assertions (61 baseline − 1 for dropped 11.2)" → "68 …" with the updated derivation note: 60 baseline + 8 provenance net),
+  - line 18 ("NOT counted in 60" → "NOT counted in 68"),
+  - any per-scenario `(N assertions)` annotation whose set changed.
+  These header files MUST be added to the Step 3 `git add`. **Lead signs off on the final integer (68).** Keep this as a concrete target, not an open TODO. Run both modes:
 ```bash
 SMOKE_SKIP_DOCKER=1 go test ./... && go test ./...
 ```
 Expected: green both modes (provenance tests are daemon-free; docker-gated v1 ones still gated).
-- [ ] **Step 3: Commit** — lead: `git add test/cenvkit-acceptance_test.go && git commit -m "test(acceptance): env-debug provenance (trace/effective/json, W3 winner)"`
+- [ ] **Step 3: Commit** — lead: `git add test/cenvkit-acceptance_test.go && git commit -m "test(acceptance): env-debug provenance (trace/effective/json, W3 winner); count 60→68"` (the same file holds the new assertions AND the updated header count comments at lines 1–2/17/18 — stage it once).
 
 ---
 
@@ -717,16 +793,18 @@ Expected: green both modes (provenance tests are daemon-free; docker-gated v1 on
 **Owner:** architect (lead). **Depends on:** T4.
 
 - [ ] **Step 1:** Update `docs/cenvkit.md` — rewrite the `env-debug` section: `--trace` (winner/overridden/effects), `--effective [--service]` (per-service env + sources), `--value`, `--json`; note it is **daemon-free** and supersedes v1's raw `--value/--trace` and the `docker compose config`-backed `--effective`. Add a short "Provenance model" subsection (the `Report` shape).
-- [ ] **Step 2:** `CHANGELOG.md` — add under `[Unreleased]` a "rich provenance (v2)" entry. Flip the v2 spec status line to "implemented".
+- [ ] **Step 2:** `CHANGELOG.md` — add under `[Unreleased]` a "rich provenance (v2)" entry. Note the **breaking CLI change: `--diff` removed** in v2 (superseded by `--trace --var` + `--effective`; spec §7 omits it) and the `--trace`/`--value` form now takes `--var VAR`. Flip the v2 spec status line to "implemented". Also reflect the `--diff` removal in `docs/cenvkit.md` (Step 1).
 - [ ] **Step 3:** Commit (lead).
 
 ---
 
 ## Self-review (author, against the spec)
 
-**Spec coverage:** §2 A → T2 (chain attribution) ✓ · §2 B-lite → T2 (raw load + walk + substitute) ✓ · §2 C → T2 (per-service, D1 lever) ✓ · §3 use dotenv/template → T2 (`dotenv.ReadFile`, `template.ExtractVariables`/`SubstituteWithOptions`) ✓ · §4 architecture (engine owns compose-go; provenance pure; engine→provenance) → file structure + T1/T2 ✓ · §5 model → T1 ✓ · §7 CLI (`--trace/--effective/--value/--chain/--files/--service/--json`) → T3 ✓ · §9 errors (chain-only no-compose; load failure fatal; unset var "not set") → T2 (chain-only return; wrapped errors) + T1 (`renderTrace` "not set") ✓ · §10 testing (provenance unit, engine unit, golden JSON, acceptance, daemon-free) → T1/T2/T4 ✓ · §11 probe done → reflected in T2 code ✓.
+**Architecture reconciliation (Option A — spec updated to match this plan):** This plan's design is the chosen one: `engine.Provenance(ctx, ProvInput)` returns `provenance.Report` **directly**; chain attribution (A) is computed **inside the engine** over the cmd-supplied ordered `EnvFiles` (over the merged EFFECTIVE env = files + environment overlay, not files-only); `engine` imports `provenance` (one direction); `provenance` stays pure-Go. The intermediate `engine.ProvenanceFacts/ServiceEnvFacts/KVSource/EffectFact` types and the `internal/provenance.Build(chainAttr, facts)` step are **dropped** — they never exist in this plan. The spec (§4/§5/§6/§10) has been updated to this single-Report design; there is no exported `engine.ParseDotEnv` (engine uses an internal lowercase `parseDotEnv`).
 
-**Gaps fixed inline:** (1) `--diff` had no provenance meaning → retained as a back-compat **alias of `--effective`** (T3) rather than dropped, so no CLI regression. (2) `--effective` no longer shells out to docker — stated in T3 Step 1 + T5 docs.
+**Spec coverage (against the UPDATED spec):** §2 A → T2 (chain attribution over the merged effective env) ✓ · §2 B-lite → T2 (raw load + walk + substitute over merged env) ✓ · §2 C → T2 (per-service, D1 lever, merged env to `cli.WithEnv`) ✓ · §3 use dotenv/template → T2 (`dotenv.ReadFile` with lookupFn, `template.ExtractVariables`/`SubstituteWithOptions`) ✓ · **§4 architecture — design is engine-owns-A / single `provenance.Report` (engine→provenance, provenance pure); this DIVERGED from the spec's old `ProvenanceFacts`/`Build`/chain-A sketch, which has now been deleted from the spec to match (Option A)** → file structure + T1/T2 ✓ · **§5 model → T1 only (`Report`; the engine-side `Facts` block is removed from the spec per Option A — no green check against the dropped contract)** ✓ · §6 flow → engine assembles A+B-lite+C directly into `Report` (no `Build` node); spec §6 step 3 updated to match ✓ · §7 CLI (`--trace --var`/`--effective`/`--value --var`/`--chain`/`--files`/`--service`/`--json`; **`--diff` removed**) → T3 ✓ · §9 errors (chain-only no-compose; load failure fatal; unset var "not set") → T2 (chain-only return; wrapped errors) + T1 (`renderTrace` "not set") ✓ · §10 testing (provenance render unit on hand-built `Report` fixtures, engine unit, golden JSON, acceptance, daemon-free) → T1/T2/T4 ✓ · §11 probe done → reflected in T2 code ✓.
+
+**Gaps fixed inline:** (1) `--diff` (the v1 Layer-2-over-Layer-1 var diff) is **removed in v2** — spec §7 omits it; it is superseded by `--trace --var` (per-var winner/overridden/effects) and `--effective` (per-service env). Noted as a breaking CLI change in T5 docs. (No "alias" relationship is created — that never existed in v1.) (2) `--effective` no longer shells out to docker — stated in T3 Step 1 + T5 docs. (3) The interpolation env is built from the MERGED `COMPOSE_ENV_FILES` (files last-wins, then OS overlay) for B-lite mapping, `details.Environment`, AND the C-load `cli.WithEnv`, so Layer-2-only vars like `${WEB_PORT}` resolve correctly (findings [0]/[2]); A's reported Value/Winner/Overridden are made consistent via the final `(environment)` overlay (finding [3]).
 
 **Placeholder scan:** none — engine mechanism is the probe-verified code; tests are concrete; the only injected helpers (`findService`/`entry`) are flagged for qa with their contract.
 

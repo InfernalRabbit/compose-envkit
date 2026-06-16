@@ -24,12 +24,21 @@ tooling. This supersedes v1's raw `--value/--trace`.
 
 Three provenance depths, all in:
 
-- **A — chain attribution.** For each variable in the merged `COMPOSE_ENV_FILES`:
-  the files that set it (in order), the winner (last-wins), and the shadowed ones.
+- **A — chain attribution.** For each variable in the merged EFFECTIVE env
+  (`COMPOSE_ENV_FILES` in order PLUS the shell `environment` overlaid last,
+  last-wins — mirroring what compose actually interpolates): the files that set it
+  (in order), the winner, and the shadowed ones. When the shell env overrides a
+  file, the file is reported as shadowed and the winner is the `environment` layer.
+  (A is attribution over the merged effective env, not files-only.)
 - **B-lite — interpolation effect.** For a variable: where its `${VAR}` reference
   took effect in the resolved compose (which service / field) and the resolved
   value. **No source coordinates** (no compose-file/line for the `${VAR}` site —
-  that is B-full, deferred §8).
+  that is B-full, deferred §8). **Effects are reported for service fields only**
+  (`services.<name>.<field>`). `${VAR}` references in top-level `networks:`,
+  `volumes:`, `configs:`, `secrets:`, and `x-*` blocks are out of scope this
+  increment (alongside B-full, §8). Such a reference still appears in A (chain
+  attribution) if the var is a `COMPOSE_ENV_FILES`/chain key; only its `Effects`
+  entry is omitted.
 - **C — per-service environment.** For each service: the effective container
   environment and the source file of each value (`env_file:` entries in order +
   inline `environment:`).
@@ -56,28 +65,34 @@ reuse it for **parity** instead of writing our own (`go doc`-verified 2026-06-16
 CI seam check (only `internal/engine` may import compose-go) requires they live in
 `internal/engine`. This reinforces Approach 1 below.
 
-## 4. Architecture (Approach 1 — engine owns all compose-go)
+## 4. Architecture (Approach 1 — engine owns all compose-go; single `Report`)
 
 ```
 cmd/cenvkit (env-debug)
-   │  chain.Resolve(dir) ─────────────► Files, Vars, chain attribution (A, pure Go*)
-   │  engine.Provenance(ctx, Input) ──► engine.ProvenanceFacts   (compose-go-free)
+   │  chain.Resolve(dir) ───────────────► Files, Vars
+   │  assemble ordered EnvFiles (Layer-1 from chain, Layer-2 from engine.Resolve)
+   │  engine.Provenance(ctx, ProvInput) ─► provenance.Report   (A + B-lite + C)
    ▼
-internal/provenance.Build(chainAttr, facts) ──► Report ──► render: human | --json
+provenance.RenderHuman | RenderJSON(Report) ──► human (default) | --json
 ```
 
 - **`internal/engine`** (the ONLY compose-go importer; CI-enforced). New method on
-  the `Engine` interface: `Provenance(ctx, Input) (ProvenanceFacts, error)`. Does
-  all compose-go work — the two loads, dotenv parsing, `template.ExtractVariables`
-  — and returns a **compose-go-free** `ProvenanceFacts`.
-- **`internal/chain`** — adds chain attribution (A): which file set each key, in
-  order, and the winner. *Uses compose-go's dotenv via an engine-exposed helper so
-  the parser matches what is reported (see §6 note); the seam stays intact because
-  the helper lives in `engine`.*
-- **`internal/provenance`** (new, pure Go, no compose-go) — defines the `Report`
-  model, builds it from chain attribution + `ProvenanceFacts`, and renders
-  (human text default; `--json`).
-- **`cmd/cenvkit`** — `env-debug` wires the three together.
+  the `Engine` interface: `Provenance(ctx, ProvInput) (provenance.Report, error)`.
+  Does all compose-go work — the raw + resolved loads, `dotenv` parsing,
+  `template.ExtractVariables`/`SubstituteWithOptions` — AND assembles chain
+  attribution (A, over the cmd-supplied ordered `EnvFiles`), interpolation effects
+  (B-lite), and per-service env (C) **directly into a `provenance.Report`**. There
+  is no intermediate compose-go-free `ProvenanceFacts` type and no separate
+  `provenance.Build` step — the engine returns the finished `Report`.
+- **`internal/provenance`** (new, pure Go — imports neither compose-go nor
+  `engine`) — defines the shared `Report` model and renders it (human text
+  default; `--json`). It is a fast, dependency-light leaf.
+- **`cmd/cenvkit`** — `env-debug` calls `chain.Resolve`, assembles the ordered
+  `EnvFiles`, calls `engine.Provenance`, and renders the returned `Report`.
+
+**Coupling:** `engine` imports `provenance` for the shared model types (one
+direction); `provenance` imports neither. (A is computed inside `engine`, not in
+`chain` — `chain` does not import compose-go and does no attribution here.)
 
 `Provenance` changes the `engine.Engine` contract (a sensitive seam) → the engine
 implementation is done via a **plan-mode review** at execution time.
@@ -86,7 +101,7 @@ implementation is done via a **plan-mode review** at execution time.
 
 ```go
 // package provenance
-type Source     struct { File, Layer string } // Layer: layer1|layer2|environment|interp
+type Source     struct { File, Layer string } // Layer: layer1|layer2|env_file|environment
 type Effect     struct { Service, Field, Resolved string }
 type VarTrace   struct {
     Name       string
@@ -104,25 +119,29 @@ type Report     struct {
 }
 ```
 
-```go
-// package engine — compose-go-free output of Provenance
-type ProvenanceFacts struct {
-    Services []ServiceEnvFacts          // C: per-service env + source file per key
-    Effects  map[string][]EffectFact    // B-lite: var -> []{service, field, resolved}
-}
-type ServiceEnvFacts struct { Service string; Entries []KVSource }
-type KVSource         struct { Key, Value, SourceFile, Layer string }
-type EffectFact       struct { Service, Field, Resolved string }
-```
+`engine.Provenance` returns this `provenance.Report` **directly** — there is no
+intermediate engine-side `ProvenanceFacts`/`ServiceEnvFacts`/`KVSource`/`EffectFact`
+type and no `provenance.Build` step. The engine assembles A + B-lite + C into the
+`Report` in one pass. (`engine` imports `provenance` for these shared types.)
 
 ## 6. Data flow (the B-lite mechanism)
 
-1. `chain.Resolve(dir)` → `Files`, `Vars`, and per-var attribution (A) by
-   `dotenv.Parse`-ing each `COMPOSE_ENV_FILES` entry in order (last write wins;
-   record shadowed sources).
-2. `engine.Provenance(ctx, Input{ProjectDir, Env: Vars, ConfigFiles, Profiles})`
-   — mechanism **verified** against compose-go v2.11.0
+1. `chain.Resolve(dir)` → `Files`, `Vars`. `cmd/cenvkit` assembles the ordered
+   `EnvFiles` (Layer-1 from the chain `Files`, Layer-2 from `engine.Resolve`) and
+   passes them in `ProvInput`. (Attribution itself happens inside `engine` — see
+   step 2's A.)
+2. `engine.Provenance(ctx, ProvInput{ProjectDir, Env: Vars, ConfigFiles, Profiles,
+   EnvFiles})` — mechanism **verified** against compose-go v2.11.0
    (`.claude/artifacts/compose-go-provenance-probe.md`):
+   - **Merged interpolation env (first):** `dotenv.ReadFile` each `EnvFiles` entry
+     in declaration order (later file wins), then overlay `Env` (OS/Layer-1 seed)
+     last → the effective env that drives both the B-lite `mapping` and the C-load.
+   - **A — chain attribution (over the merged EFFECTIVE env):** for each var, the
+     `EnvFiles` that set it (in order), the winner (last-wins), shadowed sources,
+     PLUS a final `(environment)` overlay so the reported `Value`/`Winner`/
+     `Overridden` match what compose actually interpolates (when the shell env
+     overrides a file, the file becomes Overridden and the winner is
+     `{File:"(environment)", Layer:"environment"}`).
    - **One RAW (non-interpolated) load:** `loader.LoadConfigFiles(ctx, configFiles,
      workingDir)` → `*types.ConfigDetails`; set `details.Environment` = the chain
      env; then `loader.LoadModelWithContext(ctx, *details, {SkipInterpolation,
@@ -132,42 +151,55 @@ type EffectFact       struct { Service, Field, Resolved string }
      `template.ExtractVariables(map[string]any{"x": leaf}, template.DefaultPattern)`
      gives the referenced var NAMES (names only — no path; that is why we walk), and
      `template.SubstituteWithOptions(leaf, mapping, template.WithoutLogging)`
-     resolves the leaf *in place* (`mapping` = lookup over the chain env). Emit
-     `EffectFact{service, field, resolved}` per name. **Do NOT** read the resolved
-     value from an interpolated load — interpolation expands short forms (`ports:
-     "8080:80"` → a struct): the *normalization-on-interpolation trap*. One raw
-     load + per-leaf substitute avoids it entirely.
+     resolves the leaf *in place* (`mapping` = lookup over the **merged** effective
+     env from the first step, so a Layer-2-only `${WEB_PORT}` resolves to its real
+     value, not a `:-default`). Append an `Effect{service, field, resolved}` to the
+     var's `VarTrace.Effects` per name. **Do NOT** read the resolved value from an
+     interpolated load — interpolation expands short forms (`ports: "8080:80"` → a
+     struct): the *normalization-on-interpolation trap*. One raw load + per-leaf
+     substitute avoids it entirely.
    - **C:** relies on the engine's existing `cli.WithoutEnvironmentResolution` (the
      D1 lever), which keeps `ServiceConfig.Environment` INLINE-ONLY and leaves the
-     `env_file:` list separate in `svc.EnvFiles`. Per service: `dotenv.ReadFile`
-     each `svc.EnvFiles[].Path` in declaration order (later overrides earlier), then
-     apply inline `svc.Environment` (`map[string]*string`, overrides), recording the
-     source of each final key → `ServiceEnvFacts`. (If the D1 lever were dropped,
+     `env_file:` list separate in `svc.EnvFiles`. The resolved load is fed the SAME
+     merged effective env via `cli.WithEnv` (so inline `${VAR}` values resolve like
+     B-lite). Per service: `dotenv.ReadFile` each `svc.EnvFiles[].Path` in
+     declaration order (later overrides earlier), then apply inline
+     `svc.Environment` (`map[string]*string`, overrides), recording the source of
+     each final key → `ServiceEnv.Entries`. (If the D1 lever were dropped,
      `Environment` would be env_file-merged and C would be unattributable.)
-3. `provenance.Build(chainAttr, facts)` → `Report`.
+3. `engine.Provenance` assembles A (over the cmd-supplied ordered `EnvFiles`) +
+   B-lite + C **directly** into a `provenance.Report` — no separate `Build` call.
 4. Render: human tree/table by default; `--json` emits `Report`.
 
 > §6 note (parser consistency): A's attribution and C's parsing both go through
-> compose-go's `dotenv` so the *reported* sources match docker-compose semantics
-> exactly. The helper is exposed from `engine` (e.g. `engine.ParseDotEnv(path)`)
-> so `chain` can use it without importing compose-go directly — seam intact. v1's
-> hand-rolled `chain.parseDotEnv` (still used to build the interpolation seed) may
-> be unified onto this helper as a follow-up; not required for v2.
+> compose-go's `dotenv` (the engine-internal lowercase `parseDotEnv`, threaded a
+> `dotenv.LookupFn` over the merged chain env) so the *reported* sources match
+> docker-compose semantics exactly. A is computed inside `engine` (not `chain`), so
+> no exported `engine.ParseDotEnv` helper is needed and `chain` does no compose-go
+> work. A genuinely-unset external `${VAR}` inside an env_file still warns
+> (correct last-wins parity); only chain-provided vars are silenced via the lookup.
 
 ## 7. CLI surface (extends `env-debug`; all daemon-free)
 
-- `cenvkit env-debug --trace VAR [--json]` → `VarTrace`: value, winner file,
+- `cenvkit env-debug --trace --var VAR [--json]` → `VarTrace`: value, winner file,
   shadowed files (in order), and effects (service/field/resolved). **[A + B-lite]**
 - `cenvkit env-debug --effective [--service S] [--json]` → per-service env with
   sources; `--service` filters to one. **[C]**
 - `cenvkit env-debug --chain [--json]` / `--files [--json]` → as v1, plus JSON.
-- `cenvkit env-debug --value VAR` → the winning value from provenance (replaces
-  v1's raw-merge `--value`).
+- `cenvkit env-debug --value --var VAR` → the winning value from provenance
+  (replaces v1's raw-merge `--value`).
+- `--trace` and `--value` are bool flags; the variable is named via `--var VAR`
+  (v1 consistency — keeps the existing `--var` flag and committed tests).
+- The v1 `--diff` flag is **removed** in v2 (superseded by `--trace --var` +
+  `--effective`; see §8).
 
 ## 8. Non-goals (this increment)
 
 - **B-full** — source coordinates (compose file + field/line for each `${VAR}`
   site). Deferred; needs raw-YAML position tracking across the include graph.
+- **Non-service interpolation effects** — `${VAR}` sites in top-level
+  `networks:`/`volumes:`/`configs:`/`secrets:`/`x-*` blocks are not attributed in
+  `Effects` this increment (only `services.<name>.<field>` fields are; see §2 B-lite).
 - **Two-pass / fixpoint `env_file:`-path resolution** (v1 §4a limitation) — still
   deferred; separate increment.
 - **Rendered-compose artifact** (`render`/cross-env diff) — separate increment.
@@ -179,21 +211,25 @@ type EffectFact       struct { Service, Field, Resolved string }
   (`Vars` with A; empty `Services`/`Effects`); not an error.
 - **Malformed compose / load failure** → fatal, actionable, wrapped error.
 - **Missing chain file** → skipped (parity); simply not a source.
-- **`--trace VAR` for an unset var** → reported "not set" (empty), not an error.
+- **`--trace --var VAR` for an unset var** → reported "not set" (empty), not an error.
 
 ## 10. Testing
 
-- **`provenance.Build` (unit, qa):** table-driven over fake `ProvenanceFacts` +
-  chain attribution — winner/overridden ordering, Effects mapping, ServiceEnv
-  sources. Pure Go, no docker.
+- **`provenance` render (unit, qa):** table-driven over **hand-built `Report`
+  fixtures** — `RenderHuman`/`RenderJSON` over winner/overridden ordering, Effects
+  mapping, ServiceEnv sources. Pure Go, no docker (no `Build` step exists; the
+  engine returns the finished `Report`).
 - **`engine.Provenance` (unit):** over `examples/monorepo` (service `env_file`s
   exist on disk) + scratch fixtures — assert the raw-load dict walk attributes a
   real var used in a field (a `ports:` `${VAR}` → service/field/resolved) and that
   per-service sources are correct. No docker.
 - **`--json` golden tests** — stable schema.
-- **Acceptance:** new `env-debug --trace`/`--json` assertions. These are **new**
-  assertions → the acceptance count grows beyond N=60; the new exact total is
-  pinned in the v2 plan (lead sign-off).
+- **Acceptance:** new `env-debug --trace --var`/`--json`/`--effective`/`--value
+  --var` assertions. The smoke-monorepo count **grows 60 → 68** (baseline 60 + 8
+  net provenance assertions; the new `--value --var` assertion REPLACES the v1 raw
+  `--value` one, so it is net-zero). The exact total (68) is pinned in the v2 plan
+  Task 4 Step 2 with lead sign-off, and the header count comments in
+  `test/cenvkit-acceptance_test.go` are bumped 60 → 68 in the same commit.
 - All provenance tests are **daemon-free**.
 
 ## 11. Risk / upstream-fidelity
