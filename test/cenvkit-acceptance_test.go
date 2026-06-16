@@ -565,7 +565,7 @@ func TestScenario_G5_InstallLayout(t *testing.T) {
 	}
 }
 
-// ─── C1: single-pass §4a contract (throwaway fixture, NOT counted in 60) ─────
+// ─── C1: single-pass §4a contract (throwaway fixture, NOT counted in 68) ─────
 
 // C1: an env_file: path referencing a var defined ONLY in another service's Layer-2
 // env_file does NOT silently resolve (single-pass, Layer-1-only interpolation).
@@ -605,7 +605,7 @@ services:
 	}
 }
 
-// ─── D1 runtime-fatal half (docker-gated, throwaway fixture, NOT counted in 60) ──
+// ─── D1 runtime-fatal half (docker-gated, throwaway fixture, NOT counted in 68) ──
 
 // D1 runtime: missing *required* env_file is lenient at assembly but fatal at
 // the real docker compose run (cenvkit compose must NOT carry the lever into the exec).
