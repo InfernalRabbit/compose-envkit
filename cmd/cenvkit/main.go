@@ -14,9 +14,9 @@ import (
 
 	"github.com/compose-envkit/compose-envkit/internal/bootstrap"
 	"github.com/compose-envkit/compose-envkit/internal/chain"
-	"github.com/compose-envkit/compose-envkit/internal/debug"
 	"github.com/compose-envkit/compose-envkit/internal/engine"
 	"github.com/compose-envkit/compose-envkit/internal/envfiles"
+	"github.com/compose-envkit/compose-envkit/internal/provenance"
 )
 
 // version is overridden at release time via -ldflags "-X main.version=...".
@@ -257,62 +257,76 @@ func newInitCmd() *cobra.Command {
 
 func newEnvDebugCmd() *cobra.Command {
 	var (
-		mChain, mDiff, mEffective, mFiles, mTrace, mValue bool
-		varName                                           string
+		mChain, mEffective, mFiles, mTrace, mValue, jsonOut bool
+		varName, service                                    string
 	)
 	c := &cobra.Command{
 		Use:   "env-debug",
-		Short: "Inspect the resolved env chain",
+		Short: "Inspect the resolved env chain with provenance",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			merged, cr, _, err := assemble(cmd)
+			dir, err := resolveProjectDir(cmd)
+			if err != nil {
+				return err
+			}
+			cr, err := chain.Resolve(chain.Input{ProjectDir: dir, OSEnv: os.Environ(), Hostname: os.Hostname})
+			if err != nil {
+				return err
+			}
+			// Assemble the ordered COMPOSE_ENV_FILES with layer labels: Layer-1 from
+			// the chain, Layer-2 from engine.Resolve (only when a compose file is in
+			// play — same HasComposeFileEnv gate as assemble(), so chain-only mode
+			// stays Layer-1-only and engine.Provenance returns A with empty Services).
+			pf := make([]engine.ProvFile, 0, len(cr.Files))
+			for _, f := range cr.Files {
+				pf = append(pf, engine.ProvFile{Path: f, Layer: "layer1"})
+			}
+			profiles := splitProfiles(envValue(cr.Vars, "COMPOSE_PROFILES"))
+			if engine.HasComposeFileEnv(dir, cr.Vars) {
+				er, rerr := engine.New().Resolve(cmd.Context(), engine.Input{
+					ProjectDir: dir, Env: cr.Vars, Profiles: profiles,
+				})
+				if rerr != nil {
+					return rerr
+				}
+				for _, f := range er.EnvFiles {
+					pf = append(pf, engine.ProvFile{Path: f, Layer: "layer2"})
+				}
+			}
+			rep, err := engine.New().Provenance(cmd.Context(), engine.ProvInput{
+				ProjectDir: dir, Env: cr.Vars, Profiles: profiles, EnvFiles: pf,
+			})
 			if err != nil {
 				return err
 			}
 			out := cmd.OutOrStdout()
-			switch {
-			case mValue:
-				fmt.Fprintln(out, debug.Value(cr.Files, varName)) // Layer-1 chain only (smoke.sh:218)
-			case mTrace:
-				debug.Trace(out, merged, varName) // merged: --trace must see Layer-2 (e.g. SVC_PORT)
-			case mFiles:
-				debug.PrintFiles(out, merged)
-			case mDiff:
-				debug.Diff(out, cr.Files, sliceAfter(merged, cr.Files))
-			case mEffective:
-				dc := exec.Command("docker", "compose", "config")
-				dc.Env = append(os.Environ(), "COMPOSE_ENV_FILES="+envfiles.Join(merged))
-				dc.Stdout, dc.Stderr = out, os.Stderr
-				return dc.Run()
-			default: // --chain is the default view
-				_ = mChain
-				debug.PrintChain(out, cr.Files)
+			if jsonOut {
+				return provenance.RenderJSON(out, rep)
 			}
+			provenance.RenderHuman(out, rep, provenance.HumanOpts{
+				Trace: pick(mTrace, varName), Value: pick(mValue, varName),
+				Effective: mEffective, Service: service, Chain: mChain, Files: mFiles,
+			})
 			return nil
 		},
 	}
-	c.Flags().BoolVar(&mChain, "chain", false, "show Layer-1 chain files")
-	c.Flags().BoolVar(&mDiff, "diff", false, "show vars Layer-2 adds over Layer-1")
-	c.Flags().BoolVar(&mEffective, "effective", false, "docker compose config (rendered)")
-	c.Flags().BoolVar(&mFiles, "files", false, "show full COMPOSE_ENV_FILES list")
-	c.Flags().BoolVar(&mTrace, "trace", false, "trace files that set --var")
-	c.Flags().BoolVar(&mValue, "value", false, "print the effective value of --var")
-	c.Flags().StringVar(&varName, "var", "", "variable name for --trace/--value")
+	c.Flags().BoolVar(&mChain, "chain", false, "Layer-1 chain files (default view)")
+	c.Flags().BoolVar(&mEffective, "effective", false, "per-service env with sources")
+	c.Flags().BoolVar(&mFiles, "files", false, "full COMPOSE_ENV_FILES list")
+	c.Flags().BoolVar(&mTrace, "trace", false, "trace --var: winner, overridden, effects")
+	c.Flags().BoolVar(&mValue, "value", false, "winning value of --var")
+	c.Flags().StringVar(&varName, "var", "", "variable for --trace/--value")
+	c.Flags().StringVar(&service, "service", "", "filter --effective to one service")
+	c.Flags().BoolVar(&jsonOut, "json", false, "machine-readable JSON")
 	return c
 }
 
-// sliceAfter returns merged entries that are not in layer1 (the Layer-2 tail).
-func sliceAfter(merged, layer1 []string) []string {
-	in := map[string]bool{}
-	for _, f := range layer1 {
-		in[f] = true
+// pick returns name when enabled, else "" — maps a bool mode + --var into the
+// string fields provenance.HumanOpts uses for --trace / --value.
+func pick(enabled bool, name string) string {
+	if enabled {
+		return name
 	}
-	var out []string
-	for _, f := range merged {
-		if !in[f] {
-			out = append(out, f)
-		}
-	}
-	return out
+	return ""
 }
 
 func main() {

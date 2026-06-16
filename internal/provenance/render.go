@@ -12,8 +12,8 @@ type HumanOpts struct {
 	Trace     string // non-empty: single-var trace (A + B-lite)
 	Effective bool   // per-service env (C)
 	Service   string // filter Effective to one service
-	Chain     bool   // Files as Layer-1 list (default view)
-	Files     bool   // full Files list
+	Chain     bool   // Layer-1-only list (default view) — renders Report.ChainFiles
+	Files     bool   // full Report.Files list (Layer-1 + Layer-2)
 	Value     string // non-empty: print the winning value only
 }
 
@@ -37,8 +37,8 @@ func RenderHuman(w io.Writer, r Report, o HumanOpts) {
 		for _, f := range r.Files {
 			fmt.Fprintln(w, f)
 		}
-	default: // Chain == default view
-		for _, f := range r.Files {
+	default: // Chain == default view: Layer-1 only (Report.ChainFiles)
+		for _, f := range r.ChainFiles {
 			fmt.Fprintln(w, f)
 		}
 	}

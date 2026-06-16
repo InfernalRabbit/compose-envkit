@@ -45,8 +45,15 @@ type ServiceEnv struct {
 // Report is the whole env-debug picture: the ordered COMPOSE_ENV_FILES, the
 // per-variable traces (A + B-lite), and the per-service effective env (C, empty
 // in chain-only mode).
+//
+// Files is the FULL merged list (Layer-1 + Layer-2) in COMPOSE_ENV_FILES order;
+// ChainFiles is the Layer-1-only subset in chain order. The two are distinct
+// views: `--files` renders Files, `--chain` (and the default view) renders
+// ChainFiles — v1 semantics where a bare `env-debug` == `--chain` and secrets are
+// last WITHIN the Layer-1 chain (acceptance TestScenario12 [12.4]).
 type Report struct {
-	Files    []string            `json:"files"`              // COMPOSE_ENV_FILES order
-	Vars     map[string]VarTrace `json:"vars"`               // A + B-lite
-	Services []ServiceEnv        `json:"services,omitempty"` // C (empty in chain-only mode)
+	Files      []string            `json:"files"`              // full merged COMPOSE_ENV_FILES order (Layer-1 + Layer-2)
+	ChainFiles []string            `json:"chain_files"`        // Layer-1-only subset, chain order
+	Vars       map[string]VarTrace `json:"vars"`               // A + B-lite
+	Services   []ServiceEnv        `json:"services,omitempty"` // C (empty in chain-only mode)
 }
