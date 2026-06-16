@@ -8,3 +8,4 @@
 - [distribution config facts](distribution-config-facts.md) — shim/binary name collision, goreleaser v2 + golangci v2 formats, .gitignore lead-owned, validate YAML via in-module yaml lib when tools absent
 - [cobra persistent flag read-from-root](cobra-persistent-flag-read-from-root.md) — read persistent flags via cmd.Root().PersistentFlags().Get; cmd.Flags() omits them on root (silent fall-through-to-default bug)
 - [provenance --chain vs --files view](provenance-chain-vs-files-view.md) — env-debug --chain = Layer-1 only (secrets-last, acceptance 12.4); plan's RenderHuman collapsed --chain/--files to full Report.Files; fix via HumanOpts.ChainFiles []string from cmd
+- [macOS sed/xargs gotcha](macos-sed-xargs-gotcha.md) — BSD sed -i needs '' arg; grep -lZ|xargs -0 sed collapses filenames; use find -exec + per-file loop for bulk in-file swaps
