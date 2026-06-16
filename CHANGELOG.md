@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+### Removed
+
+The deprecated POSIX-`sh` kit (the self-locating `docker` shim, the `lib/` engine
++ parser + debugger, the `mk/` Make glue, the `templates/`, the `completions/`,
+the installer, the shell smoke/lint suites, and the sh-era docs) is removed —
+`cenvkit` (the Go CLI) is the only implementation. The `examples/monorepo`
+blueprint is now cenvkit-driven (Makefiles removed).
+
 ### rich provenance — `env-debug` v2
 
 `cenvkit env-debug` is now **provenance-backed and daemon-free**: it loads the
@@ -47,9 +55,8 @@ POSIX `cenvkit` shim. Commands: `compose`, `env-files`, `env-debug`, `validate`,
 
 ### Deprecated
 
-- The POSIX-`sh` kit (`bin/docker`, `lib/`, `mk/`, `scripts/`, `install.sh`) is
-  **deprecated** in favor of `cenvkit`. It still works, remains the parity
-  reference, and is retained for one release, then removed.
+- The POSIX-`sh` kit was **deprecated** in favor of `cenvkit`, and is now
+  **removed** (see Removed, above).
 
 ### Earlier — monorepo feature parity (sh kit, M1–M5)
 

@@ -6,11 +6,11 @@ Auto-loaded by every teammate. `.claude/TEAM.md` is the FULL protocol but is
 ## Project overview
 
 `compose-envkit` closes the gap where a service `env_file:` is invisible to
-Docker Compose's compile-time `${VAR}` interpolation. The POSIX-`sh` kit
-(`lib/`, `mk/`, `bin/docker`, `templates/`) is **frozen legacy/reference**. Active
-work is the **`cenvkit` Go rewrite**: a Go CLI on `github.com/compose-spec/compose-go`
-(Docker's own loader), distributed dual-mode (installable + vendorable), v1
-"thin" (assemble `COMPOSE_ENV_FILES`, exec `docker compose`). Spec:
+Docker Compose's compile-time `${VAR}` interpolation. The implementation is
+**`cenvkit`**, a Go CLI on `github.com/compose-spec/compose-go` (Docker's own
+loader), distributed dual-mode (installable + vendorable), v1 "thin" (assemble
+`COMPOSE_ENV_FILES`, exec `docker compose`). The original POSIX-`sh` kit has been
+removed — cenvkit is the only implementation. Spec:
 `docs/superpowers/specs/2026-06-15-cenvkit-go-rewrite-design.md`.
 
 ## Module boundaries (no overlap; refuse work outside your zone)
@@ -18,20 +18,16 @@ work is the **`cenvkit` Go rewrite**: a Go CLI on `github.com/compose-spec/compo
 | Owner | Owns | Never touches |
 |---|---|---|
 | **architect** (lead) | `.claude/`, `docs/`, planning, ALL git surgery, synthesis | edits code (read-only) |
-| **go-engineer** | `cmd/cenvkit/`, `internal/**`, `go.mod`, `go.sum` | `*_test.go`, docs, legacy sh kit |
+| **go-engineer** | `cmd/cenvkit/`, `internal/**`, `go.mod`, `go.sum` | `*_test.go`, docs |
 | **qa-engineer** | `**/*_test.go`, `test/` (Go + ported smoke acceptance) | prod code (report bugs to go-engineer) |
 | **code-reviewer** | `.claude/artifacts/` (report only) | edits anything else (read-only) |
 
-**Legacy sh kit** (`lib/ mk/ bin/docker templates/ install.sh test/smoke*.sh test/lint.sh`):
-do NOT modify except on explicit lead direction — it is the parity reference.
-
 ## Verification commands
 
-- Go (target): `go build ./...` · `go test ./...` · `go vet ./...` · `gofmt -l .`
+- Go: `go build ./...` · `go test ./...` · `go vet ./...` · `gofmt -l .`
   (and `golangci-lint run` if installed).
-- Acceptance / legacy (still valid): `sh test/lint.sh` · `sh test/smoke.sh` ·
-  `sh test/smoke-monorepo.sh` (61 assertions; the Go tool must keep these green
-  once ported to drive `cenvkit`).
+- Acceptance: `sh test/smoke-monorepo.sh` (drives the `cenvkit` binary; must stay
+  green).
 
 ## Conventions
 
@@ -39,9 +35,9 @@ do NOT modify except on explicit lead direction — it is the parity reference.
   do not reimplement or diverge; pin its version, bump deliberately + re-run
   acceptance.
 - Go: `gofmt`, wrapped errors with context, table-driven tests, small focused
-  packages (`internal/chain`, `internal/engine`, `internal/debug`).
-- Carried safety rules (from the sh kit): **no `sudo`, no `chmod 777`, no secrets
-  written to disk**; secrets load **last** in the chain (last-wins).
+  packages (`internal/chain`, `internal/engine`, `internal/provenance`).
+- Safety rules: **no `sudo`, no `chmod 777`, no secrets written to disk**;
+  secrets load **last** in the chain (last-wins).
 - POSIX `sh` for any shipped shell (the vendor shim); `sh -n` clean.
 
 ## Operating principles
@@ -86,6 +82,5 @@ disk. To lead/peers send a **summary + file link**, not a wall of text.
 
 - **Do NOT touch `/Users/infernal_rabbit/Workflow/Big/Access/monorepo`** — separate
   repo, off-limits without explicit user go-ahead.
-- Do NOT rewrite the legacy sh kit except on lead direction (it is the reference).
 - Secrets never committed. One squashed commit per milestone; **git surgery is
   the lead's job** (see `.claude/TEAM.md`).

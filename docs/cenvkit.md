@@ -13,9 +13,9 @@ over-discovery (the `include:` graph is authoritative), `${SVC_DIR}` and nested
 `${A:-${B:-c}}` resolve, and there is no `sed`-injection vector (pure Go strings,
 host/env tokens whitelisted to `[A-Za-z0-9._-]`).
 
-> The legacy POSIX-`sh` kit (`bin/docker`, `lib/`, `mk/`, `scripts/`,
-> `install.sh`) is **deprecated** and retained one release as the parity
-> reference. See [integration.md](integration.md) for it.
+> The legacy POSIX-`sh` kit (which lived under `bin/`, `lib/`, and `mk/`) has
+> been **removed** as of the sh-removal release. `cenvkit` is the only
+> implementation.
 
 ## How it works (the two layers)
 

@@ -1,8 +1,8 @@
 # compose-envkit
 
-A small, dependency-free toolkit that drops a **Docker Compose env-chain +
-service `env_file:` discovery + a debug flow** into any project — on any
-POSIX-capable OS.
+A small **Go CLI** (`cenvkit`) that adds a **Docker Compose env-chain + service
+`env_file:` discovery + a provenance debug flow** to any project, built on
+Docker's own `compose-go` loader.
 
 It closes one specific gap that native Docker Compose leaves open: a service's
 `env_file:` paths populate the **container runtime** environment, but they do
@@ -13,10 +13,10 @@ your service `env_file:` actually defines instead of silently falling back to
 `3000`. (That's the whole reason the kit exists — see
 [The gap](#the-gap-native-compose-doesnt-close).)
 
-**v1 is `cenvkit`, a Go CLI** built on Docker's own compose loader
-(`compose-spec/compose-go`) — it replaces the original POSIX-`sh` engine, which is
-now the legacy/reference implementation (deprecated, retained one release). The
-Go CLI needs only a Go toolchain (no Python, no Node).
+**`cenvkit` is a Go CLI** built on Docker's own compose loader
+(`compose-spec/compose-go`). It is the only implementation — the original
+POSIX-`sh` engine has been removed. The Go CLI needs only a Go toolchain (no
+Python, no Node).
 
 ---
 
@@ -47,43 +47,6 @@ Or **vendor** it: commit the Go module + the POSIX `cenvkit` shim and run
 
 ---
 
-## Legacy install — POSIX sh kit (deprecated, retained one release)
-
-> **Deprecated (v1).** The pure-`sh` kit below (`install.sh`, `./docker`,
-> `scripts/`, `lib/`, `mk/`) is the original implementation and now the parity
-> reference. It still works and is retained for one release, then removed — new
-> projects should use `cenvkit` above.
-
-From a complete checkout of the kit, point `install.sh` at your project:
-
-```sh
-sh /path/to/compose-envkit/install.sh /path/to/your/project
-```
-
-That vendors the engine into `your-project/scripts/`, drops a self-locating
-`./docker` shim at the project root, generates a `.docker-env-chain` and
-`example.*` env templates (it never clobbers a real `.env`/`.secrets.env`), and
-prints the one-line Makefile include plus next steps. It is idempotent — re-run
-it any time to refresh the vendored scripts.
-
-Then, in your project:
-
-```sh
-cp example.env         .env            # fill in non-secret defaults
-cp example.secrets.env .secrets.env    # fill in secrets (stays gitignored)
-echo 'include scripts/compose.mk' >> Makefile
-
-./docker env-files        # see the resolved env chain
-./docker compose config   # interpolation now includes the env_file: layer
-make env-debug            # inspect the chain
-```
-
-`--dry-run` (`-n`) prints every action without writing, and `--help` (`-h`)
-shows the full installer banner. Manual integration is documented in
-[`docs/integration.md`](docs/integration.md).
-
----
-
 ## What it is, and why
 
 Modern Docker Compose already handles most of what a hand-rolled wrapper used to
@@ -107,11 +70,17 @@ an intentional, long-standing design split upstream
 ([docker/compose#3435](https://github.com/docker/compose/issues/3435), open
 since 2016).
 
-compose-envkit's engine parses every `docker-compose*.yml`, extracts each
-service's `env_file:` paths, and folds them into `COMPOSE_ENV_FILES` **in
-addition** to the project chain. Now the same files that configure the container
-at runtime also feed compose-time interpolation, last-wins. That's Layer 2.
-Concepts in full: [`docs/concepts.md`](docs/concepts.md).
+`cenvkit` loads the real, include-aware compose model (via Docker's own
+`compose-go` loader), enumerates each active service's resolved `env_file:`
+paths, and folds them into `COMPOSE_ENV_FILES` **in addition** to the project
+chain. Now the same files that configure the container at runtime also feed
+compose-time interpolation, last-wins. That's Layer 2. Full reference:
+[`docs/cenvkit.md`](docs/cenvkit.md).
+
+```sh
+cenvkit env-files       # the resolved COMPOSE_ENV_FILES, including the env_file: layer
+cenvkit compose config  # interpolation now sees that layer
+```
 
 ---
 
@@ -131,101 +100,86 @@ defaults when that file is absent). The default chain is:
 `${ENV}` (alias `${COMPOSE_ENV}`) is resolved as **shell `COMPOSE_ENV`
 > `.env`'s `COMPOSE_ENV` > `"dev"`**. Non-existent files are silently skipped.
 
-**Layer 2 — service `env_file:` paths.** Auto-discovered from your
-`docker-compose*.yml` files (searched to `COMPOSE_DEPTH` levels, default 3),
-`${COMPOSE_ENV:-default}`-substituted, normalized and de-duplicated, then
-appended after Layer 1. These files are already declared in your YAML — the kit
-simply also makes them visible to interpolation.
+**Layer 2 — service `env_file:` paths.** Enumerated from the real, include-aware
+compose model (`compose-go`): the active services' resolved, absolute `env_file:`
+paths, normalized and de-duplicated, then appended after Layer 1. These files are
+already declared in your YAML — `cenvkit` simply also makes them visible to
+interpolation.
 
 ```
   shell COMPOSE_ENV / .env / "dev"  ─┐
                                      ├─►  ${ENV} substitution in .docker-env-chain
   .docker-env-chain (Layer 1)  ──────┘            │
                                                   ▼
-  docker-compose*.yml env_file: (Layer 2) ──►  COMPOSE_ENV_FILES  ──►  docker compose
+  compose model env_file: (Layer 2)  ──►  COMPOSE_ENV_FILES  ──►  docker compose
 ```
 
-See `./docker env-files` for the exact resolved list in your project.
+See `cenvkit env-files` for the exact resolved list in your project.
 
 ---
 
 ## Run from root AND from a subproject
 
-The `./docker` shim is **self-locating**. It finds the engine in this order:
-
-1. its own `scripts/compose-env.sh` (a fully vendored copy), then
-2. the parent directory's `scripts/compose-env.sh` (a shim that rides on the
-   repo root's install), then
-3. a minimal **inline fallback** (Layer-1 only) for a subproject cloned
-   standalone with no reachable `scripts/`.
-
-So you have two clean options for a subproject:
-
-- **Ride on the parent** — drop a copy of `./docker` into the subproject dir;
-  it walks up to the repo root's `scripts/`. Zero extra files.
-- **Self-contained** — run `sh install.sh <subproject-dir>` to give the
-  subproject its own `scripts/` copy, so it works even when cloned on its own.
-
-Either way, `./docker` runs with `PROJECT_DIR` set to **its own directory**, and
-all env-chain resolution and `env_file:` discovery happen relative to that — so
-running from the root and running from a subproject each resolve their own
+`cenvkit` resolves everything relative to its **project directory**: the current
+directory by default, or `--project-dir <dir>` to point elsewhere. All env-chain
+resolution and `env_file:` enumeration happen relative to that directory — so
+running from the repo root and running from a subproject each resolve their own
 files correctly.
+
+```sh
+cenvkit env-files                    # resolve from the current directory
+cd web && cenvkit compose config     # resolve web/'s own chain + env_file:
+cenvkit --project-dir web env-files  # same, without changing directory
+```
 
 ### Monorepo — root orchestrates subprojects
 
 The flip side of subproject *isolation* is the **unified stack**: a root compose
-that `include:`s each subproject, run as one stack from the root. The kit's
-depth-N `env_file:` discovery (`COMPOSE_DEPTH`, default 3) reaches **across** the
-`include:`, so a `${WEB_PORT}` declared only in `web/.web.env` resolves even when
-you render the config from the root — native compose lands on the `:-0` fallback
-there. The root Makefile drives the unified stack via `$(DC)` and delegates to
-each subproject's own Makefile with `make -C <sub>`.
+that `include:`s each subproject, run as one stack from the root. Because
+`cenvkit` loads the real, include-aware compose model, Layer-2 enumeration
+reaches **across** the `include:`, so a `${WEB_PORT}` declared only in
+`web/.web.env` resolves even when you render the config from the root — native
+compose lands on the `:-0` fallback there.
 
-Runnable blueprint: [`examples/monorepo/`](examples/monorepo/). Full guide
-(topology, the depth knob, env layering, delegation, gotchas):
-[`docs/monorepo.md`](docs/monorepo.md).
+Runnable blueprint: [`examples/monorepo/`](examples/monorepo/).
 
 ---
 
 ## The debug flow at a glance
 
-`env-debug` (via `make env-debug*` or `sh scripts/env-debug.sh <mode>`) inspects
-the chain dynamically — it never hardcodes your variable or service names.
+`cenvkit env-debug` is **provenance-backed and daemon-free**: it loads the
+compose model in-process (compose-go), with no `docker compose` shell-out, and
+never hardcodes your variable or service names. Add `--json` to any mode for the
+structured report (tooling/CI).
 
 | Mode | What it shows |
 |---|---|
-| `--chain` (default) | which env files load, in what order, tagged by origin (Layer 1 / Layer 2) |
-| `--diff` | per file: what each one **adds** (`+`), **overrides** (`~`), or **repeats** (`·`) |
-| `--effective` | final per-service values via `./docker compose config` (every `${VAR:-default}` resolved) |
-| `--files` | bare list of loaded paths (machine-readable; for `grep`/`xargs`) |
-| `--trace --var NAME` | the full call stack for one variable: where it's defined, its `${REF}`s, and the effective value |
-| `--value --var NAME` | one resolved project-level value, plain stdout (for `make`/scripts) |
+| `--chain` (default) | the Layer-1 chain files, in load order (secrets last) |
+| `--files` | the full merged `COMPOSE_ENV_FILES` (Layer 1 + Layer 2) |
+| `--effective [--service S]` | each service's effective env, with the source of every value (`env_file:` vs inline `environment:`) |
+| `--trace --var NAME` | NAME's winning value, the file that set it, the files it shadowed, and where `${NAME}` took effect (service/field → resolved value) |
+| `--value --var NAME` | NAME's winning value, one line (for scripts) |
 
-Filters `--service <name>` and `--var <NAME>` combine with any mode. Full
-walkthrough with real output: [`docs/debug-flow.md`](docs/debug-flow.md).
+Full reference: [`docs/cenvkit.md`](docs/cenvkit.md).
 
 ```sh
-make env-debug                          # the chain, with origins
-make env-debug-diff VAR=DATABASE_HOST   # who set/overrode DATABASE_HOST
-make env-debug-effective SERVICE=web    # final values compose will use for web
-make env-debug-trace VAR=APP_PORT       # the whole resolution stack
+cenvkit env-debug                              # the chain, in load order
+cenvkit env-debug --trace --var DATABASE_HOST  # who set/shadowed DATABASE_HOST
+cenvkit env-debug --effective --service web     # final values compose will use for web
+cenvkit env-debug --trace --var APP_PORT --json # the whole resolution, as JSON
 ```
 
 ---
 
 ## Requirements
 
-- **POSIX `sh`** and **portable `awk`** (both standard on Linux/macOS/BSD). No
-  bashisms; no GNU-only `readlink -f` / `realpath` / `sed -i`.
-- **GNU make** for the `make` targets (BSD-make caveats in
-  [`docs/portability.md`](docs/portability.md)).
-- **Docker Compose** for the compose-touching modes (`--effective`, `--trace`,
-  `make validate`, and `./docker compose`). The Layer-2 `env_file:` discovery
-  relies on `env_file: required:` support, so target **Docker Compose ≥ 2.24.0**
-  (Jan 2024). Chain-only modes (`--chain`, `--diff`, `--files`, `--value`) work
-  without Docker.
-- **Windows:** via **WSL2** or **Git-Bash**. No native PowerShell in this
-  version — see [`docs/portability.md`](docs/portability.md).
+- **A Go toolchain** to install or build `cenvkit` (`go install` /
+  `go run …@latest`, or `go build` in vendored mode). No Python, no Node.
+- **Docker Compose** for the compose-touching commands (`cenvkit compose …`,
+  `cenvkit validate`). The `env-debug` provenance modes load the model
+  in-process via compose-go and need **no** running Docker daemon.
+- **Cross-platform:** `cenvkit` is a pure-Go binary — it runs natively on Linux,
+  macOS, and Windows.
 
 ---
 
@@ -233,53 +187,34 @@ make env-debug-trace VAR=APP_PORT       # the whole resolution stack
 
 ```
 compose-envkit/
-├── cmd/cenvkit/                     # [v1] the Go CLI entry (cobra)
-├── internal/                        # [v1] chain · engine · envfiles · debug · bootstrap
-│                                    #      (compose-go is isolated behind internal/engine)
-├── cenvkit                          # [v1] vendored-mode POSIX shim (go run ./cmd/cenvkit)
-├── go.mod / go.sum                  # [v1] module + compose-go v2.11.0 pin
-├── bin/docker                       # [legacy sh kit] universal self-locating shim
-├── lib/
-│   ├── compose-env.sh               # COMPOSE_ENV_FILES assembly (the engine)
-│   ├── parse-compose-env-files.sh   # portable-awk env_file: parser (Layer 2)
-│   └── env-debug.sh                 # the debug-flow inspector (all modes)
-├── mk/
-│   ├── compose.mk                   # DC / DC_PROD / PLATFORM / validate / help
-│   └── env-debug.mk                 # env-debug* + completion targets
-├── templates/                       # .docker-env-chain + example.* env files
-├── completions/                     # bash/zsh tab-completion for make targets
-├── install.sh                       # idempotent integrator
-├── examples/monorepo/               # runnable root-include:s-subprojects blueprint
-├── test/{smoke.sh,smoke-monorepo.sh,lint.sh}   # end-to-end + monorepo + static checks
-└── docs/                            # concepts · integration · monorepo · debug-flow · portability
+├── cmd/cenvkit/         # the Go CLI entry (cobra)
+├── internal/
+│   ├── chain/           # Layer 1 — the .docker-env-chain project chain (pure Go)
+│   ├── engine/          # Layer 2 — env_file: enumeration (the only compose-go importer)
+│   ├── envfiles/        # merge / order / dedup into COMPOSE_ENV_FILES
+│   ├── provenance/      # env-debug provenance model + human/JSON render
+│   └── bootstrap/       # cenvkit init
+├── cenvkit              # vendored-mode POSIX shim (runs `go run ./cmd/cenvkit`)
+├── go.mod / go.sum      # module + compose-go v2.11.0 pin
+├── examples/monorepo/   # runnable root-include:s-subprojects blueprint (cenvkit-driven)
+├── test/                # acceptance suite driving the cenvkit binary
+└── docs/cenvkit.md      # the canonical command + behavior reference
 ```
-
-After `install.sh`, your project gets `./docker`, `scripts/` (the flattened
-engine + `.mk` files + `completions/`), `.docker-env-chain`, and `example.*`.
 
 ---
 
 ## Documentation
 
-- [`docs/cenvkit.md`](docs/cenvkit.md) — **the Go CLI (v1) — start here**:
-  install (both modes), commands, and behavior contracts (D1 missing-`env_file:`,
-  variable precedence, the `env_file:`-path model, `COMPOSE_DEPTH`, over-discovery
-  removal).
-- [`docs/concepts.md`](docs/concepts.md) — the env-chain order, Layer-2
-  discovery, the `env_file:`→interpolation gap, and the read-time
-  `${VAR:+...}` gotcha.
-- [`docs/integration.md`](docs/integration.md) — *[legacy sh kit]* `install.sh`
-  flow and manual integration; root vs isolated-subproject setup; overlay/secret
-  conventions.
-- [`docs/monorepo.md`](docs/monorepo.md) — root-`include:` topology (unified
-  stack from root), cross-subproject Layer-2 + the `COMPOSE_DEPTH` knob, env
-  layering, and root Makefile delegation (`make -C sub`). Blueprint in
-  [`examples/monorepo/`](examples/monorepo/).
-- [`docs/debug-flow.md`](docs/debug-flow.md) — every `env-debug` mode with
-  example invocation and output.
-- [`docs/portability.md`](docs/portability.md) — POSIX guarantees, Windows via
-  WSL2/Git-Bash, BSD-vs-GNU caveats.
-- `AGENTS.md` — integration guide for AI agents.
+- [`docs/cenvkit.md`](docs/cenvkit.md) — **the canonical reference — start
+  here**: install (both modes), the two layers, every command, the `env-debug`
+  provenance modes, and the behavior contracts (D1 missing-`env_file:`, variable
+  precedence, the `env_file:`-path model, `COMPOSE_DEPTH` accepted-but-ignored,
+  no over-discovery).
+- [`docs/superpowers/`](docs/superpowers/) — the design spec and implementation
+  plans (historical record).
+- [`AGENTS.md`](AGENTS.md) — integration guide for AI agents.
+- [`examples/monorepo/`](examples/monorepo/) — runnable, cenvkit-driven
+  root-`include:`s-subprojects blueprint.
 
 ---
 
