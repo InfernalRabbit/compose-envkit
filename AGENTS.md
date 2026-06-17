@@ -10,17 +10,28 @@ You are integrating **compose-envkit** into a repository. The implementation is
 **`COMPOSE_ENV_FILES`** (or `.env`). It does **NOT** use a service's own
 `env_file:` entries for that interpolation — those are only injected into the
 container at runtime. So `ports: ["${APP_PORT:-3000}:3000"]`, with `APP_PORT`
-defined in the service's `env_file:`, resolves to the `:-3000` fallback at
-compose time. **Closing that gap is the entire reason cenvkit exists.**
+defined only in the service's `env_file:`, resolves to the `:-3000` fallback at
+compose time.
 
-`cenvkit` loads the real, include-aware compose model, enumerates every active
-service's resolved `env_file:` paths, folds them into `COMPOSE_ENV_FILES` (after
-the project chain, deduped, secrets-last within the chain), and then `exec`s
-`docker compose` so compose-time `${VAR}` refs see those values.
+`cenvkit` does two things about this:
 
-**Do NOT "simplify" an integrated project by replacing `cenvkit compose` with
-raw `docker compose`.** That silently reintroduces the gap and breaks any
-interpolation that depends on a service `env_file:`.
+1. It assembles `COMPOSE_ENV_FILES` from your **Layer-1 project chain**
+   (`.docker-env-chain`: tokenized, ordered, secrets-last) and `exec`s
+   `docker compose`. The chain is the place for values that should feed `${VAR}`
+   interpolation.
+2. It keeps each service's `env_file:` **runtime-only** (native Docker — NOT folded
+   into `COMPOSE_ENV_FILES`) and provides a daemon-free **gap-detector**: when a
+   `${VAR}` is satisfied only by a service `env_file:`, `cenvkit env-debug` flags
+   that the run will fall back, and recommends the fix.
+
+**Rule for agents:** if a value is referenced as `${VAR}` in compose YAML, it must
+live in the **Layer-1 chain** (`.env`/`.<env>.env`/`.secrets.env`), NOT only in a
+service `env_file:`. Detect gaps with `cenvkit env-debug --trace --var <V>`
+(`"gap": true` in `--json`). A service `env_file:` value is for the container only.
+
+**Do NOT "simplify" an integrated project by replacing `cenvkit compose` with raw
+`docker compose`** — you lose the Layer-1 chain assembly (tokens, ordering,
+secrets-last, `COMPOSE_FILE` overlay/interpolation).
 
 ## How to run it
 

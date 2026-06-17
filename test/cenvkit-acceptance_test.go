@@ -1,5 +1,5 @@
-// Package acceptance ports the smoke-monorepo.sh (23 scenarios, 68 assertions after
-// provenance recount) and smoke.sh suites to drive the cenvkit binary directly.
+// Package acceptance ports the smoke-monorepo.sh (23 scenarios, 75 assertions after
+// v3 provenance recount) and smoke.sh suites to drive the cenvkit binary directly.
 //
 // Invocation map (replaces all ./docker / run_shim calls):
 //
@@ -14,10 +14,17 @@
 //	G4:    no fallback shim — chain-only mode succeeds with empty Layer-2
 //	G5:    install layout differs (no scripts/); cenvkit binary + .docker-env-chain
 //
-// Count: exactly 68 smoke-monorepo assertions (60 baseline + 8 provenance net-new:
-// --trace human ×2, --trace --json ×2, --effective --service --json ×1, W3-winner ×1,
-// chain-only ×2; --value --var SMOKE_VAL REPLACES the old v1 raw assertion → net 0).
-// C1 (§4a single-pass) and D1-runtime (§4b fatal) use throwaway fixtures, NOT counted in 68.
+// v3 behavior inversions vs v1/v2 (Layer-2 becomes debug-only):
+//
+//	V1: run path (env-files / compose COMPOSE_ENV_FILES) is Layer-1 ONLY — service
+//	    env_file: paths are NOT included (was: L1+L2). RED on a pre-v3 impl.
+//	V2: ${VAR} defined only in a service env_file: falls back at run time (was: resolved).
+//	V3: env-debug --trace on a service-env_file-only var reports Gap=true, runtime defs,
+//	    and the fallback resolved value — not a layer2 winner.
+//
+// Count: exactly 75 smoke-monorepo assertions (v2 baseline 68, −1 retire 6.1,
+// +5 new v3 gap/L1-only assertions, +3 prov-6 --effective inline-env invariants).
+// C1 (§4a single-pass) and D1-runtime (§4b fatal) use throwaway fixtures, NOT counted in 75.
 package acceptance
 
 import (
@@ -112,30 +119,35 @@ func TestScenario1_Init(t *testing.T) {
 
 // ─── Scenario 4: env-files discovery from root (3 assertions, no docker) ─────
 
-// 4.1 web/.web.env in output
-// 4.2 api/.api.env in output
-// 4.3 root .env in output
+// v3 INVERSION (V1): run path is Layer-1 only — service env_file: paths absent.
+// 4.1 web/.web.env must NOT appear in env-files output (was: present in v1/v2)
+// 4.2 api/.api.env must NOT appear in env-files output (was: present in v1/v2)
+// 4.3 root .env in output (Layer-1, unchanged)
 func TestScenario4_EnvFilesFromRoot(t *testing.T) {
 	root := stageMonorepo(t)
 	out, err := runCenvkit(t, root, nil, "env-files")
 	if err != nil {
 		t.Fatalf("[4] env-files: %v\n%s", err, out)
 	}
-	for _, tc := range []struct{ id, want string }{
-		{"4.1", ".web.env"},
-		{"4.2", ".api.env"},
-		{"4.3", "/.env"},
-	} {
-		if !strings.Contains(out, tc.want) {
-			t.Fatalf("[%s] expected %q in output:\n%s", tc.id, tc.want, out)
-		}
+	// 4.1 — Layer-2 service file must NOT appear in run path (V1 inversion)
+	if strings.Contains(out, ".web.env") {
+		t.Fatalf("[4.1] .web.env must NOT appear in Layer-1-only env-files output:\n%s", out)
+	}
+	// 4.2 — Layer-2 service file must NOT appear in run path (V1 inversion)
+	if strings.Contains(out, ".api.env") {
+		t.Fatalf("[4.2] .api.env must NOT appear in Layer-1-only env-files output:\n%s", out)
+	}
+	// 4.3 — Layer-1 root chain file must still appear
+	if !strings.Contains(out, "/.env") {
+		t.Fatalf("[4.3] expected /.env in Layer-1 output:\n%s", out)
 	}
 }
 
-// ─── Scenario 6: isolated api/ (3 assertions) ────────────────────────────────
+// ─── Scenario 6: isolated api/ (1 assertion, −1 vs v2) ───────────────────────
 
-// 6.1 api/ env-files lists .api.env
-// 6.2 api/ does NOT see .web.env (sibling isolation — critical negative)
+// v3 RETIRE 6.1: api/ env-files no longer lists .api.env (run path is L1-only —
+// 6.1 was the positive presence check; now covered by the L1-only run-path gate).
+// 6.2 api/ does NOT see .web.env (sibling isolation — critical negative, unchanged)
 func TestScenario6_ApiDirIsolation(t *testing.T) {
 	root := stageMonorepo(t)
 	apiDir := filepath.Join(root, "api")
@@ -143,9 +155,7 @@ func TestScenario6_ApiDirIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("[6] env-files: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, ".api.env") {
-		t.Fatalf("[6.1] expected .api.env in output:\n%s", out)
-	}
+	// 6.2 — sibling isolation: api scope must never see web's env file
 	if strings.Contains(out, ".web.env") {
 		t.Fatalf("[6.2] api scope leaked .web.env:\n%s", out)
 	}
@@ -153,16 +163,18 @@ func TestScenario6_ApiDirIsolation(t *testing.T) {
 
 // ─── Scenario 8: COMPOSE_ENV=prod (1 assertion, no docker) ───────────────────
 
-// 8.1 prod: Layer-2 discovers .web.env AND .api.env
+// v3 INVERSION (V1): run path is Layer-1 only.
+// 8.1 prod: service env_file: paths absent from env-files output (was: present in v1/v2)
 func TestScenario8_ProdEnvFiles(t *testing.T) {
 	root := stageMonorepo(t)
 	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=prod"}, "env-files")
 	if err != nil {
 		t.Fatalf("[8] env-files prod: %v\n%s", err, out)
 	}
-	for _, want := range []string{".web.env", ".api.env"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("[8.1] expected %q in prod output:\n%s", want, out)
+	// 8.1 — Layer-2 service env files must NOT appear in the run path (V1 inversion)
+	for _, absent := range []string{".web.env", ".api.env", ".reports.env"} {
+		if strings.Contains(out, absent) {
+			t.Fatalf("[8.1] %q must NOT appear in Layer-1-only prod env-files output:\n%s", absent, out)
 		}
 	}
 }
@@ -341,30 +353,32 @@ func TestScenario14_ChainOnlyNoCompose(t *testing.T) {
 
 // ─── Scenario 16: per-service env tier (2 assertions, no docker) ─────────────
 
-// 16.1 dev: web/.web.dev.env discovered
-// 16.2 prod: web/.web.prod.env found AND .web.dev.env excluded (compound assertion)
+// v3 REFRAME (V1): per-service env tiers are runtime-only; they no longer appear
+// in env-files. Assertions move to --effective (the native per-service runtime env).
+// 16.1 dev:  web service --effective includes .web.dev.env (runtime container env)
+// 16.2 prod: web service --effective includes .web.prod.env and NOT .web.dev.env
 func TestScenario16_PerServiceEnvTier(t *testing.T) {
 	root := stageMonorepo(t)
 
-	// 16.1 dev
-	devOut, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-files")
+	// 16.1 dev — per-service runtime env must include the dev tier file
+	devOut, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--effective", "--service", "web")
 	if err != nil {
-		t.Fatalf("[16] env-files dev: %v\n%s", err, devOut)
+		t.Fatalf("[16] env-debug --effective --service web dev: %v\n%s", err, devOut)
 	}
 	if !strings.Contains(devOut, ".web.dev.env") {
-		t.Fatalf("[16.1] expected .web.dev.env in dev output:\n%s", devOut)
+		t.Fatalf("[16.1] expected .web.dev.env in dev --effective output:\n%s", devOut)
 	}
 
 	// 16.2 prod: .web.prod.env present, .web.dev.env absent
-	prodOut, err := runCenvkit(t, root, []string{"COMPOSE_ENV=prod"}, "env-files")
+	prodOut, err := runCenvkit(t, root, []string{"COMPOSE_ENV=prod"}, "env-debug", "--effective", "--service", "web")
 	if err != nil {
-		t.Fatalf("[16] env-files prod: %v\n%s", err, prodOut)
+		t.Fatalf("[16] env-debug --effective --service web prod: %v\n%s", err, prodOut)
 	}
 	if !strings.Contains(prodOut, ".web.prod.env") {
-		t.Fatalf("[16.2] expected .web.prod.env in prod output:\n%s", prodOut)
+		t.Fatalf("[16.2] expected .web.prod.env in prod --effective output:\n%s", prodOut)
 	}
 	if strings.Contains(prodOut, ".web.dev.env") {
-		t.Fatalf("[16.2] .web.dev.env must be absent in prod:\n%s", prodOut)
+		t.Fatalf("[16.2] .web.dev.env must be absent in prod --effective:\n%s", prodOut)
 	}
 }
 
@@ -402,9 +416,10 @@ func TestScenario17_RootEnvTier(t *testing.T) {
 
 // ─── Scenario 18.1: profiles passthrough — env-files only (1 assertion, no docker) ──
 
-// 18.1 profiled 'tools' service OFF by default: its env_files must NOT appear.
-// (tools service has no env_file in the fixture, but the assertion proves the engine
-// excludes inactive-profile services from Result.EnvFiles.)
+// v3 INVERSION (V1): run path is Layer-1 only; service env_file: paths absent.
+// 18.1 env-files succeeds without profiles and returns Layer-1 files only;
+//
+//	service env_file: paths (.web.env, .api.env) must NOT appear.
 func TestScenario18_ProfilesEnvFiles(t *testing.T) {
 	root := stageMonorepo(t)
 	// Without COMPOSE_PROFILES=tools: tools service is inactive.
@@ -412,25 +427,28 @@ func TestScenario18_ProfilesEnvFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("[18.1] env-files: %v\n%s", err, out)
 	}
-	// web and api must be present; tools has no env_file so nothing to assert absent.
-	// The meaningful assertion here is that env-files succeeds without profiles and
-	// returns the expected active-set files.
-	if !strings.Contains(out, ".web.env") || !strings.Contains(out, ".api.env") {
-		t.Fatalf("[18.1] expected .web.env and .api.env in default profile output:\n%s", out)
+	// 18.1 — v3: service env_file: paths must NOT appear in the run path (V1 inversion).
+	// (tools has no env_file; web and api's files are runtime-only in v3.)
+	for _, absent := range []string{".web.env", ".api.env", ".reports.env"} {
+		if strings.Contains(out, absent) {
+			t.Fatalf("[18.1] %q must NOT appear in Layer-1-only env-files output:\n%s", absent, out)
+		}
 	}
 }
 
 // ─── Scenario 21: deep nesting services/<svc>/ (1 assertion, no docker) ──────
 
-// 21.1 services/reports/.reports.env discovered from root (depth-3 include)
+// v3 INVERSION (V1): run path is Layer-1 only; deep service env_file: absent.
+// 21.1 services/reports/.reports.env must NOT appear in env-files (run path is L1-only)
 func TestScenario21_DeepNesting(t *testing.T) {
 	root := stageMonorepo(t)
 	out, err := runCenvkit(t, root, nil, "env-files")
 	if err != nil {
 		t.Fatalf("[21] env-files: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, ".reports.env") {
-		t.Fatalf("[21.1] expected .reports.env in output (depth-3 include):\n%s", out)
+	// 21.1 — .reports.env is a service env_file:; must NOT appear in the run path
+	if strings.Contains(out, ".reports.env") {
+		t.Fatalf("[21.1] .reports.env must NOT appear in Layer-1-only env-files output (V1 inversion):\n%s", out)
 	}
 }
 
@@ -565,11 +583,15 @@ func TestScenario_G5_InstallLayout(t *testing.T) {
 	}
 }
 
-// ─── C1: single-pass §4a contract (throwaway fixture, NOT counted in 68) ─────
+// ─── C1: single-pass §4a contract (throwaway fixture, NOT counted in 75) ─────
 
-// C1: an env_file: path referencing a var defined ONLY in another service's Layer-2
+// C1: an env_file: path referencing a var defined ONLY in another service's
 // env_file does NOT silently resolve (single-pass, Layer-1-only interpolation).
 // RED on a hypothetical two-pass impl that fed Layer-2 vars back into path interpolation.
+//
+// v3 update: run path is Layer-1 only — a.env is a service env_file: (Layer-2),
+// so it must NOT appear in env-files output. Both assertions confirm Layer-1-only
+// single-pass: sub/.b.env absent (path unresolved) AND a.env absent (Layer-2).
 func TestC1_SinglePassLayerContract(t *testing.T) {
 	dir := t.TempDir()
 	// Service A's env_file defines ONLY_IN_A; service B's env_file path depends on it.
@@ -599,13 +621,14 @@ services:
 	if strings.Contains(out, "/sub/.b.env") {
 		t.Fatalf("[C1] sub/.b.env must NOT appear (Layer-2-only var can't interpolate Layer-2 paths):\n%s", out)
 	}
-	// a.env must appear (it is a concrete path)
-	if !strings.Contains(out, "a.env") {
-		t.Fatalf("[C1] a.env must appear in output:\n%s", out)
+	// v3: a.env is a service env_file: (Layer-2); run path is Layer-1 only.
+	// a.env must NOT appear in env-files output (was: present in v1/v2 Layer-2 list).
+	if strings.Contains(out, "a.env") {
+		t.Fatalf("[C1] a.env must NOT appear in Layer-1-only run path (v3: service env_file: is runtime-only):\n%s", out)
 	}
 }
 
-// ─── D1 runtime-fatal half (docker-gated, throwaway fixture, NOT counted in 68) ──
+// ─── D1 runtime-fatal half (docker-gated, throwaway fixture, NOT counted in 75) ──
 
 // D1 runtime: missing *required* env_file is lenient at assembly but fatal at
 // the real docker compose run (cenvkit compose must NOT carry the lever into the exec).
@@ -632,10 +655,13 @@ services:
 
 // ─── docker-dependent scenarios (gated by SMOKE_SKIP_DOCKER) ──────────────────
 
-// Scenario 3: ROOT + kit: cross-subproject Layer-2 (3 assertions)
-// 3.1 WEB_PORT == 18080
-// 3.2 API_PORT == 19090
-// 3.3 no :-0 fallback
+// Scenario 3: ROOT + v3 run path (3 assertions)
+// v3 INVERSION (V2): ${VAR} defined only in a service env_file: falls back at run time.
+// 3.1 WEB_PORT falls back — port renders as "0:80" not "18080:80"
+// 3.2 API_PORT falls back — port renders as "0:80" not "19090:80"
+// 3.3 ports resolve to the 0 fallback — docker compose config expands ${WEB_PORT:-0}:80
+//
+//	to long-form published:"0" (the literal template string never appears in resolved output)
 func TestScenario3_CrossSubprojectPorts(t *testing.T) {
 	if !dockerAvailable() {
 		t.Skip("SMOKE_SKIP_DOCKER=1")
@@ -645,14 +671,18 @@ func TestScenario3_CrossSubprojectPorts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("[3] cenvkit compose config: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "18080") {
-		t.Fatalf("[3.1] WEB_PORT 18080 not in config:\n%s", out)
+	// 3.1 — WEB_PORT must fall back (L1-only run path; 18080 is in .web.env only)
+	if strings.Contains(out, "18080") {
+		t.Fatalf("[3.1] WEB_PORT must fall back (not 18080) under Layer-1-only run path:\n%s", out)
 	}
-	if !strings.Contains(out, "19090") {
-		t.Fatalf("[3.2] API_PORT 19090 not in config:\n%s", out)
+	// 3.2 — API_PORT must fall back (19090 is in .api.env only)
+	if strings.Contains(out, "19090") {
+		t.Fatalf("[3.2] API_PORT must fall back (not 19090) under Layer-1-only run path:\n%s", out)
 	}
-	if strings.Contains(out, ":-0") {
-		t.Fatalf("[3.3] fallback :-0 must not appear in config:\n%s", out)
+	// 3.3 — docker compose config resolves ${WEB_PORT:-0}:80 → published: "0"
+	//       (the :-0 template is expanded; assert the rendered fallback value)
+	if !strings.Contains(out, `published: "0"`) {
+		t.Fatalf("[3.3] expected port fallback (published: \"0\") in resolved config (Layer-1-only run path):\n%s", out)
 	}
 }
 
@@ -739,7 +769,9 @@ func TestScenario18_ProfilesCompose(t *testing.T) {
 	}
 }
 
-// Scenario 21.2: REPORTS_PORT=15151 resolved (docker-dependent)
+// Scenario 21.2: REPORTS_PORT falls back (docker-dependent)
+// v3 INVERSION (V2): REPORTS_PORT defined only in .reports.env (service env_file:);
+// with L1-only run path it falls back to the :-0 default.
 func TestScenario21_ReportsPort(t *testing.T) {
 	if !dockerAvailable() {
 		t.Skip("SMOKE_SKIP_DOCKER=1")
@@ -749,8 +781,9 @@ func TestScenario21_ReportsPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("[21.2] compose config: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "15151") {
-		t.Fatalf("[21.2] REPORTS_PORT 15151 not in config:\n%s", out)
+	// 21.2 — REPORTS_PORT must fall back (15151 is in .reports.env only)
+	if strings.Contains(out, "15151") {
+		t.Fatalf("[21.2] REPORTS_PORT must fall back (not 15151) under Layer-1-only run path:\n%s", out)
 	}
 }
 
@@ -783,10 +816,11 @@ services:
 	}
 }
 
-// ─── env-debug provenance assertions (8 net-new; count 60→68) ────────────────
+// ─── env-debug provenance assertions (8 net-new; count 60→68→75) ────────────
 
 // provenanceReport is the minimal shape we need to parse --json output for
 // provenance assertions. Fields not needed by these tests are omitted.
+// v3 additions: Gap/InChain/RuntimeDefs on VarTrace; Gap on Effect.
 type provenanceReport struct {
 	Services []struct {
 		Service string `json:"service"`
@@ -810,30 +844,41 @@ type provenanceReport struct {
 			Service  string `json:"service"`
 			Field    string `json:"field"`
 			Resolved string `json:"resolved"`
+			Gap      bool   `json:"gap"` // v3: true when var is service-env_file-only
 		} `json:"effects"`
+		// v3 gap-detector fields
+		InChain     bool `json:"in_chain"`
+		RuntimeDefs []struct {
+			Service string `json:"service"`
+			File    string `json:"file"`
+			Value   string `json:"value"`
+		} `json:"runtime_defs"`
+		Gap bool `json:"gap"`
 	} `json:"vars"`
 }
 
-// [A + B-lite] --trace --var WEB_PORT human: winner is web/.web.env (layer2)
-// and effects contain a web service ports entry. (2 assertions)
+// [A + B-lite gap] --trace --var WEB_PORT human: v3 gap-detector output.
+// WEB_PORT is defined only in .web.env (service env_file:, runtime-only in v3).
+// v3 INVERSION (V3): was "winner is web/.web.env (layer2)"; now gap output. (2 assertions)
 func TestProvenance_Trace_WEB_PORT_Human(t *testing.T) {
 	root := stageMonorepo(t)
 	out, err := runCenvkit(t, root, nil, "env-debug", "--trace", "--var", "WEB_PORT")
 	if err != nil {
 		t.Fatalf("[prov-1] env-debug --trace --var WEB_PORT: %v\n%s", err, out)
 	}
-	// assertion 1: winner file contains web/.web.env
-	if !strings.Contains(out, "web/.web.env") {
-		t.Fatalf("[prov-1a] expected web/.web.env in --trace output:\n%s", out)
+	// prov-1a: gap line must be present (WEB_PORT is env_file-only → gap)
+	if !strings.Contains(out, "gap") {
+		t.Fatalf("[prov-1a] expected gap indicator in --trace output (WEB_PORT is service-env_file-only):\n%s", out)
 	}
-	// assertion 2: an effect for service web is present
-	if !strings.Contains(out, "service web") {
-		t.Fatalf("[prov-1b] expected 'service web' effect in --trace output:\n%s", out)
+	// prov-1b: the runtime definition (web/.web.env) must appear in the gap evidence
+	if !strings.Contains(out, "web/.web.env") {
+		t.Fatalf("[prov-1b] expected web/.web.env runtime def in --trace gap output:\n%s", out)
 	}
 }
 
-// [A + B-lite] --trace --var WEB_PORT --json: winner.layer == "layer2", effects non-empty.
-// (2 assertions)
+// [A + B-lite gap] --trace --var WEB_PORT --json: v3 gap-detector JSON fields.
+// v3 INVERSION (V3): was "winner.layer==layer2"; now Gap==true, InChain==false,
+// RuntimeDefs non-empty, Effect.Gap==true, Resolved is fallback value. (2 assertions)
 func TestProvenance_Trace_WEB_PORT_JSON(t *testing.T) {
 	root := stageMonorepo(t)
 	out, err := runCenvkit(t, root, nil, "env-debug", "--trace", "--var", "WEB_PORT", "--json")
@@ -848,13 +893,24 @@ func TestProvenance_Trace_WEB_PORT_JSON(t *testing.T) {
 	if !ok {
 		t.Fatalf("[prov-2] WEB_PORT not in vars")
 	}
-	// assertion 1: winner.layer is layer2 (from web/.web.env, not Layer-1)
-	if wp.Winner.Layer != "layer2" {
-		t.Fatalf("[prov-2a] WEB_PORT winner.layer = %q, want layer2", wp.Winner.Layer)
+	// prov-2a: Gap==true, InChain==false (WEB_PORT is service-env_file-only, not in L1 chain)
+	if !wp.Gap {
+		t.Fatalf("[prov-2a] WEB_PORT gap = false, want true (service-env_file-only var)")
 	}
-	// assertion 2: effects non-empty (B-lite: ${WEB_PORT} used in ports)
+	if wp.InChain {
+		t.Fatalf("[prov-2a] WEB_PORT in_chain = true, want false (not in Layer-1 chain)")
+	}
+	// prov-2b: RuntimeDefs non-empty with the service definition AND Effect.Gap==true
+	if len(wp.RuntimeDefs) == 0 {
+		t.Fatalf("[prov-2b] WEB_PORT runtime_defs empty, want at least one service def (web/.web.env)")
+	}
 	if len(wp.Effects) == 0 {
 		t.Fatalf("[prov-2b] WEB_PORT effects empty, want at least one port/env effect")
+	}
+	for _, e := range wp.Effects {
+		if !e.Gap {
+			t.Fatalf("[prov-2b] WEB_PORT effect.gap = false for effect %+v, want true", e)
+		}
 	}
 }
 
@@ -883,6 +939,106 @@ func TestProvenance_Effective_Web_JSON(t *testing.T) {
 		t.Fatalf("[prov-3] web service entries have no env_file or environment source: %+v", svc.Entries)
 	}
 	t.Fatalf("[prov-3] web service not found in services: %+v", rep.Services)
+}
+
+// [C --effective inline-env interpolation] Three correctness invariants for v3:
+//
+//  1. Inline environment: ${X:-fallback} where X is ONLY in the service env_file:
+//     → FOO shows "fallback", NOT the env_file value of X.  The C-load interpolates
+//     inline environment: against the Layer-1-only env (interpEnv); service env_file:
+//     values never feed that interpolation, so the :-default branch is taken.
+//     RED on any impl that folds service env_file: into the interpolation mapping.
+//
+//  2. The env_file's own literal entry (X=envfileval) still shows with source env_file.
+//     The env_file IS read for the container's runtime env — only interpolation is blocked.
+//
+//  3. An inline environment: value for the SAME key beats the env_file: value
+//     (environment > env_file precedence in Docker Compose native semantics).
+//
+// (3 assertions; count: 72 + 3 = 75)
+func TestProvenance_Effective_InlineEnvInterpolation(t *testing.T) {
+	dir := t.TempDir()
+	// svc.env defines X (env_file-only) and OVERRIDE_ME (beaten by inline env).
+	os.WriteFile(filepath.Join(dir, "svc.env"), []byte("X=envfileval\nOVERRIDE_ME=from-envfile\n"), 0o644)
+	// compose: inline environment references ${X:-fallback} and overrides OVERRIDE_ME.
+	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
+services:
+  svc:
+    image: busybox
+    env_file:
+      - path: ./svc.env
+        required: false
+    environment:
+      FOO: "${X:-fallback}"
+      OVERRIDE_ME: "from-env-inline"
+`), 0o644)
+
+	out, err := runCenvkit(t, dir, nil, "env-debug", "--effective", "--service", "svc", "--json")
+	if err != nil {
+		t.Fatalf("[prov-6] env-debug --effective --service svc --json: %v\n%s", err, out)
+	}
+	var rep provenanceReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("[prov-6] JSON parse failed: %v\n%s", err, out)
+	}
+	var svcEntries []struct {
+		Key    string `json:"key"`
+		Value  string `json:"value"`
+		Source struct {
+			Layer string `json:"layer"`
+		} `json:"source"`
+	}
+	for _, svc := range rep.Services {
+		if svc.Service != "svc" {
+			continue
+		}
+		// Re-decode into a richer type to capture the key/value/source.layer we need.
+		// (We reuse the outer provenanceReport shape; svc.Entries is already decoded.)
+		for _, e := range svc.Entries {
+			svcEntries = append(svcEntries, struct {
+				Key    string `json:"key"`
+				Value  string `json:"value"`
+				Source struct {
+					Layer string `json:"layer"`
+				} `json:"source"`
+			}{Key: e.Key, Value: e.Value, Source: struct {
+				Layer string `json:"layer"`
+			}{Layer: e.Source.Layer}})
+		}
+		break
+	}
+	if len(svcEntries) == 0 {
+		t.Fatalf("[prov-6] svc service not found or has no entries in: %+v", rep.Services)
+	}
+	entryMap := map[string]struct{ value, layer string }{}
+	for _, e := range svcEntries {
+		entryMap[e.Key] = struct{ value, layer string }{e.Value, e.Source.Layer}
+	}
+
+	// prov-6a: FOO must be "fallback" — X is env_file-only; inline env interpolates
+	// against Layer-1 only, so ${X:-fallback} takes the :-fallback branch.
+	if foo, ok := entryMap["FOO"]; !ok {
+		t.Fatalf("[prov-6a] FOO not in --effective output")
+	} else if foo.value != "fallback" {
+		t.Fatalf("[prov-6a] FOO=%q, want fallback (X is env_file-only; must NOT feed inline env interpolation)", foo.value)
+	}
+
+	// prov-6b: X must appear with source.layer=env_file (runtime container env, correct).
+	if x, ok := entryMap["X"]; !ok {
+		t.Fatalf("[prov-6b] X not in --effective output (env_file literal must still show)")
+	} else if x.layer != "env_file" {
+		t.Fatalf("[prov-6b] X source.layer=%q, want env_file", x.layer)
+	}
+
+	// prov-6c: OVERRIDE_ME must be "from-env-inline" with source.layer=environment
+	// (inline environment: beats env_file: for the same key).
+	if om, ok := entryMap["OVERRIDE_ME"]; !ok {
+		t.Fatalf("[prov-6c] OVERRIDE_ME not in --effective output")
+	} else if om.value != "from-env-inline" {
+		t.Fatalf("[prov-6c] OVERRIDE_ME=%q, want from-env-inline (environment: must beat env_file:)", om.value)
+	} else if om.layer != "environment" {
+		t.Fatalf("[prov-6c] OVERRIDE_ME source.layer=%q, want environment", om.layer)
+	}
 }
 
 // [W3 provenance form] A var set in both .env (earlier) and .secrets.env (later
@@ -930,6 +1086,143 @@ func TestProvenance_ChainOnly_JSON(t *testing.T) {
 	}
 	if cx.Winner.Layer != "layer1" {
 		t.Fatalf("[prov-5b] CHAIN_X winner.layer = %q, want layer1", cx.Winner.Layer)
+	}
+}
+
+// ─── v3 new assertions (5 net-new + 3 prov-6; 68−1+5+3 = 75) ────────────────
+
+// [V1 run-path L1-only] env-files output contains NO service env_file: path. (+1, RED on pre-v3)
+func TestV3_RunPath_EnvFiles_L1Only(t *testing.T) {
+	root := stageMonorepo(t)
+	out, err := runCenvkit(t, root, nil, "env-files")
+	if err != nil {
+		t.Fatalf("[v3-run-1] env-files: %v\n%s", err, out)
+	}
+	// All three known service env_file: paths must be absent from the run list.
+	for _, absent := range []string{".web.env", ".api.env", ".reports.env"} {
+		if strings.Contains(out, absent) {
+			t.Fatalf("[v3-run-1] service env_file path %q must NOT appear in Layer-1-only env-files:\n%s", absent, out)
+		}
+	}
+}
+
+// [V1 run-path L1-only via compose] COMPOSE_ENV_FILES set by `cenvkit compose` carries
+// NO service env_file: path. (+1, RED on pre-v3; docker-gated for compose exec)
+func TestV3_RunPath_Compose_L1Only(t *testing.T) {
+	if !dockerAvailable() {
+		t.Skip("SMOKE_SKIP_DOCKER=1")
+	}
+	root := stageMonorepo(t)
+	// Use `cenvkit compose config --services` to verify that env is assembled
+	// without service env_file: paths. The config succeeds and the known service
+	// env_file: vars (WEB_PORT, API_PORT) are NOT resolved — they fall back.
+	out, err := runCenvkit(t, root, nil, "compose", "config")
+	if err != nil {
+		t.Fatalf("[v3-run-2] cenvkit compose config: %v\n%s", err, out)
+	}
+	// service-env_file-only vars fall back to their :-default (0), not their defined values
+	if strings.Contains(out, "18080") || strings.Contains(out, "19090") || strings.Contains(out, "15151") {
+		t.Fatalf("[v3-run-2] service-env_file-only port values must NOT appear in config (L1-only run path):\n%s", out)
+	}
+}
+
+// [gap --json: runtime_defs / in_chain fields present] gap detector JSON output carries
+// the v3 gap fields. (+1, RED on pre-v3 impl without gap fields)
+func TestV3_Gap_JSON_Fields(t *testing.T) {
+	root := stageMonorepo(t)
+	out, err := runCenvkit(t, root, nil, "env-debug", "--trace", "--var", "API_PORT", "--json")
+	if err != nil {
+		t.Fatalf("[v3-gap-1] env-debug --trace --var API_PORT --json: %v\n%s", err, out)
+	}
+	var rep provenanceReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("[v3-gap-1] JSON parse failed: %v\n%s", err, out)
+	}
+	ap, ok := rep.Vars["API_PORT"]
+	if !ok {
+		t.Fatalf("[v3-gap-1] API_PORT not in vars")
+	}
+	// API_PORT is defined only in .api.env (service env_file:) → gap
+	if !ap.Gap {
+		t.Fatalf("[v3-gap-1] API_PORT gap = false, want true (service-env_file-only var)")
+	}
+	if ap.InChain {
+		t.Fatalf("[v3-gap-1] API_PORT in_chain = true, want false")
+	}
+	if len(ap.RuntimeDefs) == 0 {
+		t.Fatalf("[v3-gap-1] API_PORT runtime_defs empty, want api/.api.env def")
+	}
+}
+
+// [no-false-gap: chain var] A var present in the Layer-1 chain reports Gap=false
+// and a normal winner. (+1, RED on an over-eager gap impl)
+func TestV3_NoFalseGap_ChainVar(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("CHAIN_VAR=layer1-val\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
+services:
+  web:
+    image: busybox
+    environment:
+      CHAIN_VAR: "${CHAIN_VAR:-default}"
+`), 0o644)
+
+	out, err := runCenvkit(t, dir, nil, "env-debug", "--trace", "--var", "CHAIN_VAR", "--json")
+	if err != nil {
+		t.Fatalf("[v3-nogap-1] env-debug --trace --var CHAIN_VAR --json: %v\n%s", err, out)
+	}
+	var rep provenanceReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("[v3-nogap-1] JSON parse failed: %v\n%s", err, out)
+	}
+	cv, ok := rep.Vars["CHAIN_VAR"]
+	if !ok {
+		t.Fatalf("[v3-nogap-1] CHAIN_VAR not in vars")
+	}
+	// CHAIN_VAR is in Layer-1 → must NOT be flagged as a gap
+	if cv.Gap {
+		t.Fatalf("[v3-nogap-1] CHAIN_VAR gap = true, want false (var IS in the Layer-1 chain)")
+	}
+	if !cv.InChain {
+		t.Fatalf("[v3-nogap-1] CHAIN_VAR in_chain = false, want true")
+	}
+	if cv.Winner.Layer != "layer1" {
+		t.Fatalf("[v3-nogap-1] CHAIN_VAR winner.layer = %q, want layer1", cv.Winner.Layer)
+	}
+}
+
+// [no-false-gap: unset everywhere] A var unset in both L1 chain and all service
+// env_file:s is NOT flagged as a gap. (+1, RED on an over-eager gap impl)
+func TestV3_NoFalseGap_UnsetEverywhere(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("OTHER=val\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
+services:
+  web:
+    image: busybox
+    environment:
+      TOTALLY_UNSET: "${TOTALLY_UNSET:-fallback}"
+`), 0o644)
+
+	out, err := runCenvkit(t, dir, nil, "env-debug", "--trace", "--var", "TOTALLY_UNSET", "--json")
+	if err != nil {
+		t.Fatalf("[v3-nogap-2] env-debug --trace --var TOTALLY_UNSET --json: %v\n%s", err, out)
+	}
+	var rep provenanceReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("[v3-nogap-2] JSON parse failed: %v\n%s", err, out)
+	}
+	uv, ok := rep.Vars["TOTALLY_UNSET"]
+	if !ok {
+		// var might be absent from the map if not referenced at all — that is fine (not a gap)
+		return
+	}
+	// If present: must NOT be flagged as a gap (unset everywhere → runtime_defs empty)
+	if uv.Gap {
+		t.Fatalf("[v3-nogap-2] TOTALLY_UNSET gap = true, want false (unset everywhere)")
+	}
+	if len(uv.RuntimeDefs) != 0 {
+		t.Fatalf("[v3-nogap-2] TOTALLY_UNSET runtime_defs non-empty, want empty: %+v", uv.RuntimeDefs)
 	}
 }
 

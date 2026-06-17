@@ -30,3 +30,4 @@
 - [dotenv.ReadFile stderr warning leak](dotenv-readfile-stderr-warning-leak.md) — ReadFile(path,nil) warns on unset in-file ${VAR} via internal template.Substitute (no WithoutLogging); fix = pass chainEnv lookupFn (probe-verified)
 - [Provenance A vs B-lite OS-overlay drift](provenance-a-vs-blite-os-overlay-drift.md) — A reports raw file Value, B-lite resolves with OS-overlaid in.Env → same-var inconsistency; spec wants effective Value + `environment` layer (real=true MAJOR)
 - [seam-check echo LEAK exits 0](seam-check-echo-leak-exits-zero.md) — provenance plan line 584 seam guard prints LEAK but exits 0 (even under set -e) → CI-enforced gate can't fail; fix = `&& { echo LEAK; exit 1; }` (real=true, minor)
+- [v3 acceptance count impl exceeds plan](v3-acceptance-count-impl-exceeds-plan.md) — v3 header says 75 but spec D3/plan locked 72 (impl +3 prov-6); stale 72/68/60→68 count comments at lines 586/631/818; grep WHOLE file for stray counts

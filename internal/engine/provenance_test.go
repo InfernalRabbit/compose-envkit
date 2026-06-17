@@ -55,9 +55,9 @@ services:
     env_file:
       - ./web.env
 `)
-	// WEB_PORT lives ONLY in the Layer-2 env_file (NOT in the env slice), so the
-	// effect assertion below is RED on the pre-fix Layer-1-only mapping (which
-	// never saw WEB_PORT) and GREEN once the merged-env fix lands.
+	// WEB_PORT lives ONLY in the Layer-2 ProvFile (NOT in env slice / Layer-1).
+	// Under v3 the interpolation mapping is Layer-1-only, so WEB_PORT is a gap var:
+	// ${WEB_PORT} falls back, Effect.Resolved is the fallback, Gap=true.
 	web := writeF(t, dir, "web.env", "WEB_ONLY=yes\nTIER=fromfile\nWEB_PORT=8080\n")
 	env := []string{"COMPOSE_ENV=staging"}
 
@@ -70,12 +70,27 @@ services:
 		t.Fatalf("Provenance: %v", err)
 	}
 
-	// B-lite (Layer-2-only var effect): WEB_PORT is set ONLY in web.env, yet its
-	// ${WEB_PORT} effect on web.ports[0] must still resolve to 8080:80 — proving
-	// the interpolation mapping reads the MERGED COMPOSE_ENV_FILES, not in.Env alone.
+	// B-lite (v3 INVERT — env_file-only var falls back at interpolation; gap flagged):
+	// WEB_PORT lives ONLY in web.env (Layer-2 ProvFile) and is NOT in the env slice.
+	// Under v3 the interpolation mapping is Layer-1-only, so ${WEB_PORT} (no default)
+	// resolves to the blank/fallback ":80", NOT "8080:80". Gap=true because the var
+	// is referenced in a service field and IS in a service env_file but NOT in the
+	// interpolation env — exactly the #3435 footprint.
 	wp := rep.Vars["WEB_PORT"]
-	if len(wp.Effects) == 0 || wp.Effects[0].Service != "web" || wp.Effects[0].Resolved != "8080:80" {
-		t.Fatalf("WEB_PORT effect wrong: %+v", wp.Effects)
+	if len(wp.Effects) == 0 || wp.Effects[0].Service != "web" || wp.Effects[0].Resolved != ":80" {
+		t.Fatalf("WEB_PORT effect wrong (want Resolved=:80 fallback): %+v", wp.Effects)
+	}
+	if !wp.Effects[0].Gap {
+		t.Fatalf("WEB_PORT Effect.Gap = false, want true (env_file-only var)")
+	}
+	if wp.InChain {
+		t.Fatalf("WEB_PORT InChain = true, want false (not in Layer-1 env)")
+	}
+	if wp.Gap != true {
+		t.Fatalf("WEB_PORT Gap = false, want true")
+	}
+	if len(wp.RuntimeDefs) == 0 || wp.RuntimeDefs[0].Service != "web" || wp.RuntimeDefs[0].Value != "8080" {
+		t.Fatalf("WEB_PORT RuntimeDefs wrong (want web/8080): %+v", wp.RuntimeDefs)
 	}
 	// C: inline environment TIER overrides env_file TIER; WEB_ONLY from env_file
 	webSvc := findService(rep, "web")
@@ -85,9 +100,12 @@ services:
 	if got := entry(webSvc, "WEB_ONLY"); got.Value != "yes" || got.Source.Layer != "env_file" {
 		t.Fatalf("WEB_ONLY should be env_file 'yes', got %+v", got)
 	}
-	// A: WEB_ONLY winner is web.env
-	if rep.Vars["WEB_ONLY"].Winner.File != web {
-		t.Fatalf("WEB_ONLY winner = %q, want %q", rep.Vars["WEB_ONLY"].Winner.File, web)
+	// A (v3): WEB_ONLY is in a Layer-2 ProvFile and is NOT referenced in any service
+	// field, so it has no VarTrace entry at all — A-attribution covers Layer-1 only,
+	// and B-lite only creates entries for vars that appear in service field templates.
+	// Its value is accessible only via C (ServiceEnv), which is asserted above.
+	if _, ok := rep.Vars["WEB_ONLY"]; ok {
+		t.Fatalf("WEB_ONLY must NOT appear in rep.Vars under v3 (Layer-2, not field-referenced); got %+v", rep.Vars["WEB_ONLY"])
 	}
 }
 

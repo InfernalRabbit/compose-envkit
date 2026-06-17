@@ -1,17 +1,15 @@
 # compose-envkit
 
-A small **Go CLI** (`cenvkit`) that adds a **Docker Compose env-chain + service
-`env_file:` discovery + a provenance debug flow** to any project, built on
-Docker's own `compose-go` loader.
+A small **Go CLI** (`cenvkit`) that adds a **Docker Compose env-chain + a
+daemon-free provenance / gap debugger** to any project, built on Docker's own
+`compose-go` loader.
 
-It closes one specific gap that native Docker Compose leaves open: a service's
-`env_file:` paths populate the **container runtime** environment, but they do
-**not** participate in compose-time `${VAR}` interpolation of the YAML itself.
-compose-envkit auto-discovers those `env_file:` paths and feeds them back into
-interpolation, so `ports: "${APP_PORT:-3000}:80"` resolves to the `APP_PORT`
-your service `env_file:` actually defines instead of silently falling back to
-`3000`. (That's the whole reason the kit exists — see
-[The gap](#the-gap-native-compose-doesnt-close).)
+It manages the project env-chain that drives compose-time `${VAR}` interpolation,
+keeps each service's `env_file:` **runtime-only** (native Docker semantics), and
+**surfaces the gap** native Compose leaves open: a value defined only in a service
+`env_file:` is invisible to `${VAR}` interpolation, so `ports: "${APP_PORT:-3000}:80"`
+silently falls back to `3000`. cenvkit's `env-debug` detects and explains exactly
+that. (See [The gap](#the-gap-native-compose-doesnt-close).)
 
 **`cenvkit` is a Go CLI** built on Docker's own compose loader
 (`compose-spec/compose-go`). It is the only implementation — the original
@@ -36,7 +34,7 @@ In your project:
 ```sh
 cenvkit init               # seed .X from example.X (no-clobber), fan out one level
 cenvkit env-files          # the resolved COMPOSE_ENV_FILES chain, one path/line
-cenvkit compose config     # interpolation now includes the env_file: layer
+cenvkit compose config     # render config (interpolation = your Layer-1 chain)
 cenvkit env-debug --chain  # inspect the chain
 ```
 
@@ -70,26 +68,27 @@ an intentional, long-standing design split upstream
 ([docker/compose#3435](https://github.com/docker/compose/issues/3435), open
 since 2016).
 
-`cenvkit` loads the real, include-aware compose model (via Docker's own
-`compose-go` loader), enumerates each active service's resolved `env_file:`
-paths, and folds them into `COMPOSE_ENV_FILES` **in addition** to the project
-chain. Now the same files that configure the container at runtime also feed
-compose-time interpolation, last-wins. That's Layer 2. Full reference:
-[`docs/cenvkit.md`](docs/cenvkit.md).
+`cenvkit` does **not** paper over this by folding service `env_file:`s into
+interpolation — doing so flattens every service's env into one global namespace (a
+`${PORT}` collision footgun, since Compose interpolates the whole YAML against one
+env map). Instead it keeps `env_file:` **runtime-only** and gives you a daemon-free
+**gap-detector**: `env-debug` tells you when a `${VAR}` is satisfied only by a
+service `env_file:` (so the run falls back), shows the runtime value, and
+recommends the fix — **put values you reference as `${VAR}` into the Layer-1
+chain.** Full reference: [`docs/cenvkit.md`](docs/cenvkit.md).
 
 ```sh
-cenvkit env-files       # the resolved COMPOSE_ENV_FILES, including the env_file: layer
-cenvkit compose config  # interpolation now sees that layer
+cenvkit env-files                          # the resolved COMPOSE_ENV_FILES (Layer-1 chain)
+cenvkit env-debug --trace --var APP_PORT   # in the chain, or an env_file gap?
 ```
 
 ---
 
 ## The env-chain
 
-Two layers feed `COMPOSE_ENV_FILES`, in order, last-wins:
-
-**Layer 1 — the project chain.** Listed in `.docker-env-chain` (or built-in
-defaults when that file is absent). The default chain is:
+**The project chain is `COMPOSE_ENV_FILES`** — the interpolation context. Listed
+in `.docker-env-chain` (or built-in defaults when that file is absent). The default
+chain is:
 
 ```
 .env             # non-secret defaults (committed via example.env)
@@ -100,21 +99,21 @@ defaults when that file is absent). The default chain is:
 `${ENV}` (alias `${COMPOSE_ENV}`) is resolved as **shell `COMPOSE_ENV`
 > `.env`'s `COMPOSE_ENV` > `"dev"`**. Non-existent files are silently skipped.
 
-**Layer 2 — service `env_file:` paths.** Enumerated from the real, include-aware
-compose model (`compose-go`): the active services' resolved, absolute `env_file:`
-paths, normalized and de-duplicated, then appended after Layer 1. These files are
-already declared in your YAML — `cenvkit` simply also makes them visible to
-interpolation.
+**Service `env_file:` is runtime-only** — it configures the container, not
+interpolation, and is **not** added to `COMPOSE_ENV_FILES`. cenvkit still loads the
+real, include-aware model and enumerates those paths, but only to power `env-debug`
+(the gap-detector and the `--files` runtime-only view).
 
 ```
   shell COMPOSE_ENV / .env / "dev"  ─┐
-                                     ├─►  ${ENV} substitution in .docker-env-chain
-  .docker-env-chain (Layer 1)  ──────┘            │
-                                                  ▼
-  compose model env_file: (Layer 2)  ──►  COMPOSE_ENV_FILES  ──►  docker compose
+                                     ├─►  ${ENV} substitution
+  .docker-env-chain (Layer 1)  ──────┴─►  COMPOSE_ENV_FILES  ──►  docker compose
+                                                                  (interpolation)
+  service env_file:  ──►  container runtime env only  +  env-debug gap-detector
 ```
 
-See `cenvkit env-files` for the exact resolved list in your project.
+See `cenvkit env-files` for the chain, and `cenvkit env-debug --files` for the
+runtime-only env_file paths.
 
 ---
 
@@ -135,11 +134,11 @@ cenvkit --project-dir web env-files  # same, without changing directory
 ### Monorepo — root orchestrates subprojects
 
 The flip side of subproject *isolation* is the **unified stack**: a root compose
-that `include:`s each subproject, run as one stack from the root. Because
-`cenvkit` loads the real, include-aware compose model, Layer-2 enumeration
-reaches **across** the `include:`, so a `${WEB_PORT}` declared only in
-`web/.web.env` resolves even when you render the config from the root — native
-compose lands on the `:-0` fallback there.
+that `include:`s each subproject, run as one stack from the root. cenvkit loads the
+real, include-aware model, so `env-debug` sees the whole project. Note the rule: a
+`${WEB_PORT}` declared only in `web/.web.env` (a service `env_file:`) **falls back**
+at the root — `env_file:` is runtime-only. `cenvkit env-debug --trace --var WEB_PORT`
+flags the gap; promote `WEB_PORT` to the Layer-1 chain if you need it interpolated.
 
 Runnable blueprint: [`examples/monorepo/`](examples/monorepo/).
 
@@ -155,9 +154,9 @@ structured report (tooling/CI).
 | Mode | What it shows |
 |---|---|
 | `--chain` (default) | the Layer-1 chain files, in load order (secrets last) |
-| `--files` | the full merged `COMPOSE_ENV_FILES` (Layer 1 + Layer 2) |
+| `--files` | two groups: interpolation (`COMPOSE_ENV_FILES`, Layer 1) + runtime-only (service `env_file:` paths) |
 | `--effective [--service S]` | each service's effective env, with the source of every value (`env_file:` vs inline `environment:`) |
-| `--trace --var NAME` | NAME's winning value, the file that set it, the files it shadowed, and where `${NAME}` took effect (service/field → resolved value) |
+| `--trace --var NAME` | NAME's chain winner + where `${NAME}` took effect — or the **gap** (NAME is only in a service `env_file:`, so the run falls back) |
 | `--value --var NAME` | NAME's winning value, one line (for scripts) |
 
 Full reference: [`docs/cenvkit.md`](docs/cenvkit.md).
@@ -190,7 +189,7 @@ compose-envkit/
 ├── cmd/cenvkit/         # the Go CLI entry (cobra)
 ├── internal/
 │   ├── chain/           # Layer 1 — the .docker-env-chain project chain (pure Go)
-│   ├── engine/          # Layer 2 — env_file: enumeration (the only compose-go importer)
+│   ├── engine/          # service env_file: enumeration for env-debug (the only compose-go importer)
 │   ├── envfiles/        # merge / order / dedup into COMPOSE_ENV_FILES
 │   ├── provenance/      # env-debug provenance model + human/JSON render
 │   └── bootstrap/       # cenvkit init

@@ -1,5 +1,15 @@
 # cenvkit — Go rewrite design (compose-envkit → `cenvkit`)
 
+> **⚠ PARTIALLY SUPERSEDED (2026-06-17) by
+> `2026-06-17-cenvkit-layer2-debug-only-design.md`.** The run-path env-file model
+> here — §2 ("thin = assemble COMPOSE_ENV_FILES … exec"), §4 step 3 + step 5, §4c,
+> and the env_file→interpolation acceptance items in §13 — is **reversed**: a
+> service `env_file:` is now **runtime-only** and is NOT folded into
+> `COMPOSE_ENV_FILES`. Layer-2 enumeration survives only inside `env-debug`
+> (gap-detector). Everything else here (Layer-1 chain, COMPOSE_FILE seam,
+> include-graph load, engine seam, distribution, init, D1, determinism) still
+> holds. Read the v3 spec for the current run-path contract.
+
 Status: **implemented (v1), 2026-06-15** — the Go CLI `cenvkit` is built and green
 (`internal/{chain,engine,envfiles,bootstrap,debug}` + `cmd/cenvkit`; compose-go
 v2.11.0 isolated behind `internal/engine`; the `examples/monorepo` smoke suites

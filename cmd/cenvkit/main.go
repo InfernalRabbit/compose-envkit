@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -67,41 +66,31 @@ func resolveProjectDir(cmd *cobra.Command) (string, error) {
 	return filepath.Abs(pd)
 }
 
-// assemble runs Layer-1 + Layer-2 and returns the merged COMPOSE_ENV_FILES list,
-// the chain result, and the engine result (engine empty when no compose file).
+// assemble resolves the Layer-1 chain and returns the COMPOSE_ENV_FILES list and
+// the chain result. v3 (Layer-2 debug-only): the run path is Layer-1 ONLY — a
+// service `env_file:` is runtime-only (native per-container) and is deliberately
+// NOT folded into COMPOSE_ENV_FILES. So we pass nil as the Layer-2 arg and skip
+// engine.Resolve entirely (D1: faster compose/env-files; the engine's Layer-2
+// enumeration now lives only in env-debug as a gap-detector).
+//
 // envOverlay entries (e.g. "COMPOSE_ENV=prod") are appended AFTER os.Environ() so
 // they win via chain's osEnvMap last-wins — this is how `validate --all` re-resolves
 // the Layer-1 chain per env (findings [3]/[9]).
-func assemble(cmd *cobra.Command, envOverlay ...string) ([]string, chain.Result, engine.Result, error) {
+func assemble(cmd *cobra.Command, envOverlay ...string) ([]string, chain.Result, error) {
 	dir, err := resolveProjectDir(cmd)
 	if err != nil {
-		return nil, chain.Result{}, engine.Result{}, err
+		return nil, chain.Result{}, err
 	}
 	osEnv := append(os.Environ(), envOverlay...)
 	cr, err := chain.Resolve(chain.Input{ProjectDir: dir, OSEnv: osEnv, Hostname: os.Hostname})
 	if err != nil {
-		return nil, chain.Result{}, engine.Result{}, err
+		return nil, chain.Result{}, err
 	}
-	var er engine.Result
-	// HasComposeFileEnv takes the FULL seed env (cr.Vars) so ${COMPOSE_ENV} in a
-	// COMPOSE_FILE entry interpolates and COMPOSE_PATH_SEPARATOR is honored — it
-	// shares the resolveComposeFiles seam with engine.Resolve, so gate and loader
-	// cannot drift (findings [10]/[22]/[23]). cr.Vars carries COMPOSE_ENV.
-	if engine.HasComposeFileEnv(dir, cr.Vars) {
-		er, err = engine.New().Resolve(context.Background(), engine.Input{
-			ProjectDir: dir,
-			Env:        cr.Vars,
-			Profiles:   splitProfiles(envValue(cr.Vars, "COMPOSE_PROFILES")),
-		})
-		if err != nil {
-			return nil, chain.Result{}, engine.Result{}, err
-		}
-	}
-	merged, err := envfiles.Assemble(cr.Files, er.EnvFiles)
+	merged, err := envfiles.Assemble(cr.Files, nil)
 	if err != nil {
-		return nil, chain.Result{}, engine.Result{}, err
+		return nil, chain.Result{}, err
 	}
-	return merged, cr, er, nil
+	return merged, cr, nil
 }
 
 func envValue(vars []string, key string) string {
@@ -125,7 +114,7 @@ func newEnvFilesCmd() *cobra.Command {
 		Use:   "env-files",
 		Short: "Print the resolved COMPOSE_ENV_FILES chain, one path per line",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			merged, _, _, err := assemble(cmd)
+			merged, _, err := assemble(cmd)
 			if err != nil {
 				return err
 			}
@@ -153,7 +142,7 @@ func newComposeCmd() *cobra.Command {
 			if dirOverride != "" {
 				_ = cmd.Flags().Set("project-dir", dirOverride)
 			}
-			merged, _, _, err := assemble(cmd)
+			merged, _, err := assemble(cmd)
 			if err != nil {
 				return err
 			}
@@ -211,7 +200,7 @@ func newValidateCmd() *cobra.Command {
 				if env != "" {
 					ov = []string{"COMPOSE_ENV=" + env} // re-resolve the Layer-1 chain for THIS env
 				}
-				merged, _, _, err := assemble(cmd, ov...)
+				merged, _, err := assemble(cmd, ov...)
 				if err != nil {
 					return err
 				}
@@ -272,26 +261,18 @@ func newEnvDebugCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Assemble the ordered COMPOSE_ENV_FILES with layer labels: Layer-1 from
-			// the chain, Layer-2 from engine.Resolve (only when a compose file is in
-			// play — same HasComposeFileEnv gate as assemble(), so chain-only mode
-			// stays Layer-1-only and engine.Provenance returns A with empty Services).
+			// v3 (Layer-2 debug-only): pass ONLY the Layer-1 chain as ProvFiles. The
+			// run's COMPOSE_ENV_FILES is Layer-1-only, so the interpolation env
+			// engine.Provenance builds is Layer-1-only too — a ${VAR} defined only in
+			// a service env_file: resolves to its run fallback (the gap). The engine
+			// still enumerates the active Layer-2 set INTERNALLY (its C-loop, the
+			// gap-detector evidence); we no longer call engine.Resolve here (drops the
+			// redundant load — D1).
 			pf := make([]engine.ProvFile, 0, len(cr.Files))
 			for _, f := range cr.Files {
 				pf = append(pf, engine.ProvFile{Path: f, Layer: "layer1"})
 			}
 			profiles := splitProfiles(envValue(cr.Vars, "COMPOSE_PROFILES"))
-			if engine.HasComposeFileEnv(dir, cr.Vars) {
-				er, rerr := engine.New().Resolve(cmd.Context(), engine.Input{
-					ProjectDir: dir, Env: cr.Vars, Profiles: profiles,
-				})
-				if rerr != nil {
-					return rerr
-				}
-				for _, f := range er.EnvFiles {
-					pf = append(pf, engine.ProvFile{Path: f, Layer: "layer2"})
-				}
-			}
 			rep, err := engine.New().Provenance(cmd.Context(), engine.ProvInput{
 				ProjectDir: dir, Env: cr.Vars, Profiles: profiles, EnvFiles: pf,
 			})
@@ -311,7 +292,7 @@ func newEnvDebugCmd() *cobra.Command {
 	}
 	c.Flags().BoolVar(&mChain, "chain", false, "Layer-1 chain files (default view)")
 	c.Flags().BoolVar(&mEffective, "effective", false, "per-service env with sources")
-	c.Flags().BoolVar(&mFiles, "files", false, "full COMPOSE_ENV_FILES list")
+	c.Flags().BoolVar(&mFiles, "files", false, "interpolation set (COMPOSE_ENV_FILES) + runtime-only service env_file paths")
 	c.Flags().BoolVar(&mTrace, "trace", false, "trace --var: winner, overridden, effects")
 	c.Flags().BoolVar(&mValue, "value", false, "winning value of --var")
 	c.Flags().StringVar(&varName, "var", "", "variable for --trace/--value")

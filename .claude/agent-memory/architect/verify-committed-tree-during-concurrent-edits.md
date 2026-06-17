@@ -32,3 +32,15 @@ files owned/edited by different agents in the same window, and I staged only two
 - Prefer freezing teammates on the exact set before an expensive verify (the
   TEAM.md "freeze on the reported hash" rule applies to working-tree commits too,
   not just reported hashes). See [[thin-engine-compose-owns-resolution]] context.
+- **Freeze ALL teammates, not just one, before running "final" verification.**
+  2026-06-17 (v3 Layer-2-debug-only): I ran `go test ./...` with go-engineer frozen
+  but qa still mid-edit on the package unit tests. The run "failed" with line
+  numbers + assertion messages that did NOT match the file on disk (it reported
+  `provenance_test.go:78 "WEB_PORT effect wrong: [...]"` while disk line 81 already
+  read the updated v3 message) — a dead giveaway the tree moved under me. A raced
+  verify yields stale, misleading results; don't trust or act on them. Gate: every
+  teammate touching the tree reports "frozen + my-suite green" BEFORE you verify.
+  Bonus signal it caught (legitimately): test scope was broader than the handoff
+  named — package-level `*_test.go` (internal/**) needed the v3 updates too, not
+  just the `test/` acceptance suite. When a behavior contract changes, sweep ALL
+  `*_test.go`, and make the gate a full `go test ./...`, not just the acceptance dir.

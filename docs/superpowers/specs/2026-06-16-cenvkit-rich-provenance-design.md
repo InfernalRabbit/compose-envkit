@@ -1,5 +1,16 @@
 # cenvkit v2 — rich provenance (`env-debug`) design
 
+> **⚠ PARTIALLY SUPERSEDED (2026-06-17) by
+> `2026-06-17-cenvkit-layer2-debug-only-design.md`.** The B-lite resolution
+> semantics here — §6's "merged effective env" that folds the Layer-2 env_file set
+> into the interpolation mapping so a Layer-2-only `${WEB_PORT}` resolves to its
+> real value — are **reversed**. Effects now resolve against the **Layer-1-only**
+> interpolation env (matching the run, which no longer injects env_file), and
+> `env-debug` becomes a **gap-detector**: it flags `${VAR}` referenced in YAML +
+> defined only in a service env_file (so it falls back at the run). §2/§6/§7 are
+> superseded; the parser reuse (`dotenv`/`template`), the raw-load dict walk, the
+> daemon-free design, and C/`--effective` carry over. Read the v3 spec.
+
 Status: **implemented (v2), 2026-06-16.** Builds on the shipped
 v1 (`docs/superpowers/specs/2026-06-15-cenvkit-go-rewrite-design.md`, §11 deferred
 "rich mode"). This spec covers the **provenance** increment only; the other two

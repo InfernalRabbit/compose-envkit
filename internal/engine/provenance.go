@@ -68,13 +68,23 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 
 	rep := provenance.Report{Vars: map[string]provenance.VarTrace{}}
 
-	// --- merged interpolation env (mirror docker compose: read COMPOSE_ENV_FILES
-	// before interpolation). Build chainEnv = union of every EnvFiles entry in
-	// declaration order (later file wins, so Layer-2 over Layer-1), THEN overlay
-	// in.Env (OS / Layer-1 chain seed) LAST so the OS/shell value wins — parity
-	// with chain.go's OS-wins merge. We capture each file's parsed map once here
-	// and REUSE it for the A-attribution loop below (no double-parse).
+	// --- two env contexts (v3: Layer-2 is debug-only) ---
+	// chainEnv  = union of EVERY EnvFiles entry (all layers) + in.Env last. Its
+	//             ONLY remaining role is the dotenv lookup below — so an in-file
+	//             ${VAR} reference inside an env_file can resolve against the full
+	//             union (parity with how compose reads dotenv files). It does NOT
+	//             feed interpolation: neither the C-load WithEnv nor the B-lite
+	//             mapping read it (both use interpEnv — see the lead's v3
+	//             correction: --effective must not report a value the run won't).
+	// interpEnv = Layer-1 files + shell (in.Env) ONLY — the REAL run
+	//             interpolation env (the new COMPOSE_ENV_FILES). The B-lite
+	//             mapping, A-attribution, the A overlay, and the C-load WithEnv all
+	//             read THIS, so a ${VAR} defined only in a service env_file:
+	//             resolves to its :-default fallback, exactly like the live
+	//             `docker compose` run (#3435: env_file is not interpolated).
+	// We capture each file's parsed map once and REUSE it for A-attribution below.
 	chainEnv := map[string]string{}
+	interpEnv := map[string]string{}
 	parsed := make([]map[string]string, len(in.EnvFiles)) // parsed[i] aligns with in.EnvFiles[i]
 	lookup := dotenv.LookupFn(func(k string) (string, bool) { v, ok := chainEnv[k]; return v, ok })
 	for i, f := range in.EnvFiles {
@@ -86,28 +96,37 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 			parsed[i] = m
 			for k, v := range m {
 				chainEnv[k] = v // later file in declaration order wins
+				if f.Layer == "layer1" {
+					interpEnv[k] = v // Layer-1 ONLY feeds interpolation (defensive even after T7)
+				}
 			}
 		}
 	}
 	for k, v := range envSliceToMap(in.Env) {
-		chainEnv[k] = v // OS / Layer-1 seed wins last
+		chainEnv[k] = v  // OS / Layer-1 seed wins last
+		interpEnv[k] = v // shell overlays the Layer-1 interpolation env too
 	}
-	// mapping (B-lite) reads the merged effective env so "${WEB_PORT:-0}:80"
-	// resolves to the real value (e.g. "8080:80"), not the :-0 default.
-	mapping := template.Mapping(func(k string) (string, bool) { v, ok := chainEnv[k]; return v, ok })
+	// mapping (B-lite) reads the Layer-1-only interpolation env, so "${WEB_PORT:-0}:80"
+	// resolves to the REAL run value: the chain value when WEB_PORT is in Layer-1,
+	// else the :-0 fallback when it is defined only in a service env_file (the gap).
+	mapping := template.Mapping(func(k string) (string, bool) { v, ok := interpEnv[k]; return v, ok })
 
-	// --- A: chain attribution over the ordered merged COMPOSE_ENV_FILES ---
-	// rep.Files is the full merged list (all layers); rep.ChainFiles is the
-	// Layer-1-only subset in chain order. env-debug --chain (and the bare default
-	// view) renders ChainFiles so secrets stay last WITHIN the Layer-1 chain
-	// (acceptance TestScenario12 [12.4]). Both appends happen before the missing-file
-	// continue so the file listings stay consistent, and before the chain-only
-	// early-return below so ChainFiles is populated in chain-only mode too.
+	// --- A: chain attribution over the interpolation (Layer-1) chain ---
+	// Post-v3: rep.Files is the new COMPOSE_ENV_FILES = Layer-1 ONLY, so it equals
+	// rep.ChainFiles (both collect only "layer1" entries; D2 keeps both fields).
+	// Service env_file: (Layer-2) paths are deliberately absent — they are
+	// runtime-only and surface via the --files runtime group from rep.Services.
+	// env-debug --chain (and the bare default view) renders ChainFiles so secrets
+	// stay last WITHIN the Layer-1 chain (acceptance TestScenario12 [12.4]). The
+	// appends happen before the missing-file continue so the listings stay
+	// consistent, and before the chain-only early-return so they populate in
+	// chain-only mode too.
 	for i, f := range in.EnvFiles {
-		rep.Files = append(rep.Files, f.Path)
-		if f.Layer == "layer1" {
-			rep.ChainFiles = append(rep.ChainFiles, f.Path)
+		if f.Layer != "layer1" {
+			continue // Layer-2 (service env_file:) is runtime-only — no chain attribution
 		}
+		rep.Files = append(rep.Files, f.Path)
+		rep.ChainFiles = append(rep.ChainFiles, f.Path)
 		m := parsed[i]
 		if m == nil {
 			continue // skip missing (parity)
@@ -126,13 +145,16 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 
 	// --- A overlay: shell environment is the FINAL last-wins source, so each
 	// VarTrace's Winner/Value/Overridden stay mutually consistent with what
-	// compose actually interpolates (chainEnv overlays files with OS env). When
-	// the env overrides a file, the file becomes Overridden and the winner
-	// becomes (environment); a shell-only var (no chain file set it) is attributed
-	// to (environment) too.
+	// compose actually interpolates. We overlay interpEnv (Layer-1 + shell ONLY),
+	// NOT chainEnv — A attributes over the interpolation env, so a var defined
+	// only in a service env_file: (Layer-2) gets NO chain winner here (its
+	// definitions live in RuntimeDefs as gap evidence). When the shell overrides a
+	// Layer-1 file, the file becomes Overridden and the winner becomes
+	// (environment); a shell-only var (no chain file set it) is attributed to
+	// (environment) too.
 	envSrc := provenance.Source{File: "(environment)", Layer: "environment"}
-	for _, k := range sortedKeys(chainEnv) {
-		v := chainEnv[k]
+	for _, k := range sortedKeys(interpEnv) {
+		v := interpEnv[k]
 		vt := rep.Vars[k]
 		vt.Name = k
 		if vt.Winner.File != "" && vt.Value != v {
@@ -146,18 +168,35 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 		rep.Vars[k] = vt
 	}
 
+	// Set InChain for every var now, BEFORE the chain-only early return below —
+	// chain-only mode returns here and never reaches the gap-detection block, so
+	// InChain (which renderTrace keys off to pick the normal vs gap view) must be
+	// populated for the no-compose-file path too. Gap/RuntimeDefs stay zero-value
+	// in chain-only mode (no service env_file: set), which is correct: no compose
+	// model means no gap. The gap-detection loop re-sets InChain idempotently for
+	// the compose-file path.
+	for k, vt := range rep.Vars {
+		_, vt.InChain = interpEnv[k]
+		rep.Vars[k] = vt
+	}
+
 	// chain-only mode: no compose file => return A only.
 	if len(configs) == 0 {
 		return rep, nil
 	}
 
 	// --- C: per-service env with sources (D1 lever keeps environment inline-only) ---
-	// Feed the SAME merged env (sorted "K=V") to cli.WithEnv so inline
-	// environment values like "${WEB_PORT:-0}" resolve to the real chain value,
-	// consistent with the B-lite mapping above.
-	mergedEnv := make([]string, 0, len(chainEnv))
-	for _, k := range sortedKeys(chainEnv) {
-		mergedEnv = append(mergedEnv, k+"="+chainEnv[k])
+	// Feed interpEnv (Layer-1 + shell ONLY) — NOT chainEnv — to cli.WithEnv so an
+	// inline `environment:` value like "${WEB_PORT:-0}" interpolates against exactly
+	// what the real v3 run interpolates against (COMPOSE_ENV_FILES = Layer-1, plus
+	// host). A service `env_file:` NEVER feeds interpolation (#3435), so an inline
+	// ${X} that is defined only in an env_file must resolve to its :-default here —
+	// the TRUE container value — never the env_file value (that would make
+	// --effective lie, which spec §3 forbids). The env_file LITERAL entries below
+	// are read verbatim from svc.EnvFiles and are unaffected by WithEnv.
+	mergedEnv := make([]string, 0, len(interpEnv))
+	for _, k := range sortedKeys(interpEnv) {
+		mergedEnv = append(mergedEnv, k+"="+interpEnv[k])
 	}
 	opts, err := cli.NewProjectOptions(configs,
 		cli.WithWorkingDirectory(in.ProjectDir),
@@ -174,6 +213,10 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 	if err != nil {
 		return provenance.Report{}, fmt.Errorf("provenance load: %w", err)
 	}
+	// runtimeDefs[V] = every service env_file: definition of V (gap evidence;
+	// runtime-only — these values apply only inside the service's container, never
+	// to interpolation). Built from the SAME dotenv reads the C-loop already does.
+	runtimeDefs := map[string][]provenance.ServiceVal{}
 	svcNames := make([]string, 0, len(proj.Services))
 	for n := range proj.Services {
 		svcNames = append(svcNames, n)
@@ -183,7 +226,19 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 		svc := proj.Services[name]
 		final := map[string]string{}
 		source := map[string]provenance.Source{}
+		// Declared env_file: paths in declared order (deduped). Collected
+		// independently of parse success / inline overrides so the --files
+		// runtime-only group is faithful to what the service LOADS — a file whose
+		// every key is later inline-overridden must still appear (N-3 fix). The
+		// per-key Entries below may rewrite a source to "(inline environment:)", but
+		// that must not erase the file from this declared list.
+		var declaredFiles []string
+		seenFile := map[string]bool{}
 		for _, ef := range svc.EnvFiles {
+			if !seenFile[ef.Path] {
+				seenFile[ef.Path] = true
+				declaredFiles = append(declaredFiles, ef.Path)
+			}
 			m, perr := parseDotEnv(ef.Path, lookup)
 			if perr != nil {
 				continue
@@ -191,6 +246,7 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 			for k, v := range m {
 				final[k] = v
 				source[k] = provenance.Source{File: ef.Path, Layer: "env_file"}
+				runtimeDefs[k] = append(runtimeDefs[k], provenance.ServiceVal{Service: name, File: ef.Path, Value: v})
 			}
 		}
 		for k, vp := range svc.Environment { // map[string]*string; inline overrides
@@ -201,7 +257,7 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 			final[k] = val
 			source[k] = provenance.Source{File: "(inline environment:)", Layer: "environment"}
 		}
-		se := provenance.ServiceEnv{Service: name}
+		se := provenance.ServiceEnv{Service: name, EnvFiles: declaredFiles}
 		for _, k := range sortedKeys(final) {
 			se.Entries = append(se.Entries, provenance.EnvEntry{Key: k, Value: final[k], Source: source[k]})
 		}
@@ -213,7 +269,7 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 	if err != nil {
 		return provenance.Report{}, fmt.Errorf("provenance raw config: %w", err)
 	}
-	details.Environment = types.Mapping(chainEnv)
+	details.Environment = types.Mapping(interpEnv) // cosmetic (SkipInterpolation) but kept honest: L1+shell only
 	rawDict, err := loader.LoadModelWithContext(ctx, *details, func(o *loader.Options) {
 		o.SkipInterpolation = true
 		o.SkipValidation = true
@@ -240,13 +296,33 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 			rep.Vars[vn] = vt
 		}
 	})
-	for k, vt := range rep.Vars { // deterministic effects order
-		sort.Slice(vt.Effects, func(i, j int) bool {
+	// --- gap detection (pure Go set logic over the two env contexts) ---
+	// For each var: InChain = resolvable from the interpolation (Layer-1 + shell)
+	// env; RuntimeDefs = its service env_file: definitions; Gap when the var is
+	// REFERENCED in a service field (has Effects), is NOT in the interpolation
+	// chain, yet IS defined in some service env_file: — precisely the #3435
+	// footprint (the value sits in an env_file but the run interpolates the
+	// :-default). Effects each carry the same Gap so renderers/JSON see it per site.
+	for k, vt := range rep.Vars {
+		sort.Slice(vt.Effects, func(i, j int) bool { // deterministic effects order
 			if vt.Effects[i].Service != vt.Effects[j].Service {
 				return vt.Effects[i].Service < vt.Effects[j].Service
 			}
 			return vt.Effects[i].Field < vt.Effects[j].Field
 		})
+		_, vt.InChain = interpEnv[k]
+		vt.RuntimeDefs = runtimeDefs[k]
+		sort.Slice(vt.RuntimeDefs, func(i, j int) bool { // stable JSON
+			if vt.RuntimeDefs[i].Service != vt.RuntimeDefs[j].Service {
+				return vt.RuntimeDefs[i].Service < vt.RuntimeDefs[j].Service
+			}
+			return vt.RuntimeDefs[i].File < vt.RuntimeDefs[j].File
+		})
+		referenced := len(vt.Effects) > 0
+		vt.Gap = referenced && !vt.InChain && len(vt.RuntimeDefs) > 0
+		for i := range vt.Effects {
+			vt.Effects[i].Gap = vt.Gap
+		}
 		rep.Vars[k] = vt
 	}
 	return rep, nil

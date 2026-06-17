@@ -6,6 +6,36 @@ to [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+### Changed — `env_file:` is runtime-only (Layer-2 debug-only) ⚠ behavior change
+
+**BREAKING (pre-1.0).** A service `env_file:` is no longer folded into
+`COMPOSE_ENV_FILES`. The run path (`cenvkit compose`, `cenvkit env-files`) now sets
+`COMPOSE_ENV_FILES` to the **Layer-1 project chain only**; service `env_file:`s stay
+**runtime-only** (native Docker — per-service, isolated). A `${VAR}` defined only in
+a service `env_file:` therefore **falls back** at the run — reversing the earlier
+behavior that resolved it via folded env_files.
+
+Why: folding every service's `env_file:` into one global `COMPOSE_ENV_FILES`
+collapsed shared keys into a single project-wide value (a `${PORT}` collision
+footgun), because Compose interpolates the whole YAML against one global env map.
+Values meant for `${VAR}` interpolation belong in the Layer-1 chain.
+
+`env-debug` is repurposed from "simulate the fold" to a **gap-detector**:
+
+- `--trace --var V` flags the gap when `V` is referenced in the YAML but resolvable
+  only from a service `env_file:` (shows the runtime value + the fix).
+- `--effective` interpolates inline `environment:` against Layer 1, so it shows the
+  **true** final container value (never a resolution the run won't produce).
+- `--files` is now a two-group view: interpolation (`COMPOSE_ENV_FILES`, Layer 1) +
+  runtime-only (service `env_file:` paths, by service).
+
+Migration: if you relied on a service `env_file:` value feeding `${VAR}`
+interpolation, move that var into the Layer-1 chain
+(`.env`/`.<env>.env`/`.secrets.env`); `cenvkit env-debug --trace --var <V>` points
+out each gap. Spec:
+[`docs/superpowers/specs/2026-06-17-cenvkit-layer2-debug-only-design.md`](docs/superpowers/specs/2026-06-17-cenvkit-layer2-debug-only-design.md).
+Acceptance grew to **75** smoke-monorepo assertions.
+
 ### Removed
 
 The deprecated POSIX-`sh` kit (the self-locating `docker` shim, the `lib/` engine

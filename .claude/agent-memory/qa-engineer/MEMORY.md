@@ -6,3 +6,4 @@
 - [Fixture env file basenames](fixture-basenames.md) — confirmed on-disk Layer-2 env files in examples/monorepo
 - [YAML flow seq interpolation](yaml-flow-seq-interpolation.md) — `${VAR}` inside YAML flow sequences breaks the parser; use block form
 - [Secrets-last scope](secrets-last-scope.md) — secrets-last is Layer-1 only; assert via --chain, not env-files merged output
+- [InChain not set in chain-only mode](inchain-chain-only-mode.md) — provenance.go early return skips gap-detection; InChain=false for all vars in chain-only mode
