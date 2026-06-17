@@ -182,8 +182,9 @@ runtime-only view), never the run.
 
 ## 5. Commands
 
-Global flag: `--project-dir <dir>` — the project directory (default: the current
-directory). Everything resolves relative to it.
+Global flags: `--project-dir <dir>` — the project directory (default: the current
+directory; everything resolves relative to it). `--color auto|always|never`
+(default `auto`) — see §11.
 
 | Command | What it does |
 |---|---|
@@ -543,6 +544,31 @@ By design — `init` never clobbers an existing file. Delete it first for a fres
 **A stray `compose.yaml` isn't being picked up in a monorepo.**
 cenvkit follows the `include:` graph, not a filename glob. Add the subproject to the
 root `include:` (or `COMPOSE_FILE`).
+
+---
+
+## 11. Color
+
+Human output is colored — markers (`+` green / `~` yellow / `·` dim), section
+headers (cyan), service names (magenta), `⚠ gap` (red), `validate` ok/fail
+(green/red), errors (red). The chain/overview/effective/trace views all use it.
+
+Color is **automatic and safe**:
+
+- **On** when stdout is a terminal; **off** when piped or redirected (so
+  `cenvkit env-files | …` and captured output stay clean).
+- `--color=never` disables; `--color=always` forces (even through a pipe).
+- `NO_COLOR` (any value) disables; `CLICOLOR_FORCE`/`FORCE_COLOR` force. CI is
+  treated as non-TTY, so CI logs are plain automatically.
+- **`--json` is never colored**, regardless of `--color` — machine output stays
+  pure for tooling.
+
+```sh
+cenvkit env-debug --overview                 # colored on a terminal
+cenvkit env-debug --overview --color=never   # force plain
+cenvkit env-debug --overview --color=always | less -R   # keep color through a pager
+NO_COLOR=1 cenvkit env-debug --overview      # plain via the env convention
+```
 
 ---
 

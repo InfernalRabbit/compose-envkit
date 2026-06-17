@@ -80,14 +80,15 @@ scriptable, daemon-free design.
 | Source labels (`(layer1)`, `(env_file)`, `(environment)`) | dim |
 | `⚠ gap:` line | red; the variable name bold red |
 | `validate` ok / fail | green / red |
-| `init` created / skipped | green / dim |
+| `init` created / skipped | DEFERRED — init is currently silent (see §6) |
 | Error messages (stderr) | red |
 | `version` | plain (optionally bold name) |
 
-Adaptive: rely on lipgloss adaptive colors so the palette stays legible on light
-AND dark terminals (e.g. avoid pure bright-white on light bg). Concrete color
-values (ANSI 16 vs 256 hex) finalized in the plan; the SEMANTIC mapping above is
-the contract.
+Background legibility: use a **fixed** ANSI-16/256 palette chosen to read on BOTH
+light and dark terminals — do **NOT** use `lipgloss.AdaptiveColor` (plan probe
+correction (a): adaptive resolution issues a *blocking OSC background-color query*
+to the terminal, a hang/garbage risk in a print-and-exit CLI). The SEMANTIC
+mapping above is the contract; concrete values finalized in the plan.
 
 ## 5. Control surface (precedence, highest first)
 
@@ -109,8 +110,12 @@ gets plain), so it IS colored on a TTY per the rich decision.
   (the `provenance` render). `--json` for any of these → plain.
 - **env-files**: paths in cyan (TTY-gated).
 - **validate**: ok/fail messaging colored; exit codes unchanged.
-- **init**: created (green) / skipped (dim) lines.
-- **errors**: red, to stderr.
+- **init**: **DEFERRED** (decision 2026-06-17). `bootstrap.Init` currently prints
+  nothing (silently seeds) — there is no existing output to color, and adding
+  created/skipped lines is a NEW observable behavior (a separable feature), not
+  styling. Out of scope for this coloring milestone; a follow-up can add init
+  reporting (with its own qa + acceptance) and color it then. Leave `init` silent.
+- **errors**: red, to stderr (gated on stderr TTY).
 - **version**: plain (or bold name).
 
 ## 7. Risks / plan-time verification (verify-before-claim)
@@ -134,6 +139,36 @@ gets plain), so it IS colored on a TTY per the rich decision.
   there.
 - **Not an engine-contract change** → lighter gate than v3/overview, but the plan
   still probes the lipgloss API and the architect approves before code.
+
+## 7a. Plan-review decisions (architect sign-off, 2026-06-17)
+
+Probe done (`go get` of lipgloss, no .go edits). Plan:
+`.claude/artifacts/2026-06-17-color-output-plan.md`. **Feasibility: GREEN, additive,
+no engine-contract change.** Pinned: lipgloss v1.1.0, termenv v0.16.0, go-isatty
+v0.0.20, go-colorful v1.2.0 (+ transitives; golang.org/x/sys bumped 0.5.0→0.30.0).
+
+- **Profile control (the load-bearing risk) — VERIFIED per-renderer, no global
+  mutation.** `lipgloss.NewRenderer(out)` + `Renderer.SetColorProfile(profile)`
+  sets a per-renderer explicit profile. AUTO (`ColorProfile()`/termenv
+  `EnvColorProfile`) already honors NO_COLOR→Ascii, CLICOLOR_FORCE→force, else
+  TTY-gate (and CI-set ⇒ non-TTY ⇒ plain) for free. The `--json`/disabled path
+  uses a SEPARATE `Disabled()` renderer (Ascii) — never mutates the human one. The
+  global `lipgloss.SetColorProfile` is NOT used.
+- **Correction (a): NO `AdaptiveColor`** — fixed palette, no OSC query (see §4).
+- **Correction (b): `--color=always` = `SetColorProfile(termenv.ANSI256)`** (not
+  `WithTTY`, which NO_COLOR still beats). §5 updated in spirit; the top JSON rule
+  and precedence stand.
+- **Correction (c): CI is auto-plain** — termenv treats `CI`-set as non-TTY, so the
+  acceptance matrix is plain with zero special-casing (also a no-leak guard).
+- **Architecture: interface-in-provenance.** `internal/provenance` defines a
+  minimal `Styler` interface + a nil-safe `plainStyler` (every method returns its
+  arg) accessed via a local `st(o.Style)` helper → existing render tests (no
+  `Style` field) render byte-identical plain, ZERO churn. `internal/style` is the
+  ONLY package importing lipgloss; `cmd` wires the concrete `Lipgloss` impl. Seam
+  intact (lipgloss ≠ compose-go; `internal/engine` untouched).
+- **go.mod**: lipgloss becomes a direct dep once `internal/style` imports it; `go
+  mod tidy` finalizes (the probe left it `// indirect`). Measure binary-size delta
+  in impl; expected modest.
 
 ## 8. Testing
 

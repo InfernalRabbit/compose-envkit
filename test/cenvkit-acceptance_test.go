@@ -1313,6 +1313,97 @@ services:
 	}
 }
 
+// ─── color / ANSI no-leak guards (NOT counted in 78) ────────────────────────
+//
+// The 78 acceptance assertions above run non-TTY/CI, so their literal-string
+// matches already guard against leaked ANSI escapes (a stray \x1b would break
+// strings.Contains checks). These extra tests make the no-leak contract
+// explicit and also verify --color=always forces ANSI when requested.
+
+// TestColor_NoLeak_DefaultNonTTY: the default (auto) color mode on a non-TTY
+// process produces no ANSI escapes. This is also an implicit guard for all 78
+// acceptance assertions above — they all run in non-TTY environments.
+func TestColor_NoLeak_DefaultNonTTY(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644)
+
+	// Run WITHOUT --color flag (auto) and WITHOUT NO_COLOR/CLICOLOR_FORCE set.
+	// In a non-TTY test runner, auto resolves to plain.
+	out, err := runCenvkit(t, dir, nil, "env-debug", "--chain")
+	if err != nil {
+		t.Fatalf("[color-noleak-1] env-debug --chain: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "\x1b") {
+		t.Fatalf("[color-noleak-1] auto mode (non-TTY) leaked ANSI into --chain output:\n%s", out)
+	}
+}
+
+// TestColor_NoLeak_JSON: --json path must produce no ANSI escapes regardless
+// of --color=always (JSON is machine output; top rule in §5).
+func TestColor_NoLeak_JSON(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644)
+
+	out, err := runCenvkit(t, dir, nil, "env-debug", "--chain", "--json", "--color=always")
+	if err != nil {
+		t.Fatalf("[color-noleak-2] env-debug --chain --json --color=always: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "\x1b") {
+		t.Fatalf("[color-noleak-2] --json with --color=always leaked ANSI — JSON must always be plain:\n%s", out)
+	}
+}
+
+// TestColor_NoLeak_NeverFlag: --color=never produces no ANSI even when a TTY
+// might be present.
+func TestColor_NoLeak_NeverFlag(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644)
+
+	out, err := runCenvkit(t, dir, nil, "env-debug", "--chain", "--color=never")
+	if err != nil {
+		t.Fatalf("[color-noleak-3] env-debug --chain --color=never: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "\x1b") {
+		t.Fatalf("[color-noleak-3] --color=never leaked ANSI:\n%s", out)
+	}
+}
+
+// TestColor_NoLeak_NOCOLOR: NO_COLOR=1 env var disables ANSI output.
+func TestColor_NoLeak_NOCOLOR(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644)
+
+	out, err := runCenvkit(t, dir, []string{"NO_COLOR=1"}, "env-debug", "--chain")
+	if err != nil {
+		t.Fatalf("[color-noleak-4] env-debug --chain NO_COLOR=1: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "\x1b") {
+		t.Fatalf("[color-noleak-4] NO_COLOR=1 leaked ANSI:\n%s", out)
+	}
+}
+
+// TestColor_AlwaysFlag_OverviewHasANSI: --color=always forces ANSI escapes
+// in --overview output even in a non-TTY environment. This is the positive
+// case that confirms --color=always is wired end-to-end through the binary.
+// Uses a scratch fixture (not stageMonorepo) for speed.
+func TestColor_AlwaysFlag_OverviewHasANSI(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".docker-env-chain"), []byte(".env\n.dev.env\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".dev.env"), []byte("IS_DEV=true\n"), 0o644)
+
+	out, err := runCenvkit(t, dir, nil, "env-debug", "--overview", "--color=always")
+	if err != nil {
+		t.Fatalf("[color-always-1] env-debug --overview --color=always: %v\n%s", err, out)
+	}
+	// --color=always must force ANSI even in non-TTY
+	if !strings.Contains(out, "\x1b") {
+		t.Fatalf("[color-always-1] --color=always produced no ANSI in --overview output:\n%s", out)
+	}
+}
+
+// ─── end color / ANSI no-leak guards ─────────────────────────────────────────
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 func nonEmpty(lines []string) []string {

@@ -160,6 +160,9 @@ structured report (tooling/CI).
 | `--trace --var NAME` | NAME's chain winner + where `${NAME}` took effect — or the **gap** (NAME is only in a service `env_file:`, so the run falls back) |
 | `--value --var NAME` | NAME's winning value, one line (for scripts) |
 
+Output is **colored** on a terminal (markers, headers, gaps) and **plain** when
+piped / `--json` / `NO_COLOR` / CI — control with `--color=auto|always|never`.
+
 Full reference: [`docs/cenvkit.md`](docs/cenvkit.md).
 
 ```sh

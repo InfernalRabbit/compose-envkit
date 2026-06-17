@@ -98,7 +98,13 @@ go build -o .cenvkit.bin ./cmd/cenvkit   # .cenvkit.bin is gitignored
 | `cenvkit init` | seed `.X` from `example.X` (**no-clobber**), fan out one directory level |
 | `cenvkit version` | print the version |
 
-Global: `--project-dir <dir>` (default: current directory).
+Global: `--project-dir <dir>` (default: current directory) ·
+`--color auto|always|never` (default `auto`).
+
+**Color.** Human output is colored when stdout is a terminal and plain when piped
+/ redirected. `--color=never` disables, `--color=always` forces (even when piped).
+`NO_COLOR` (disable) and `CLICOLOR_FORCE`/`FORCE_COLOR` (force) are honored; CI is
+treated as non-TTY (plain). **`--json` output is never colored.**
 
 `env-debug` is **daemon-free** — it loads the model in-process via compose-go, with
 NO `docker compose` shell-out:

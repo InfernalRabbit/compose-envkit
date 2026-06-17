@@ -16,10 +16,23 @@ import (
 	"github.com/InfernalRabbit/compose-envkit/internal/engine"
 	"github.com/InfernalRabbit/compose-envkit/internal/envfiles"
 	"github.com/InfernalRabbit/compose-envkit/internal/provenance"
+	"github.com/InfernalRabbit/compose-envkit/internal/style"
 )
 
 // version is overridden at release time via -ldflags "-X main.version=...".
 var version = "dev"
+
+// styler is resolved once in the root PersistentPreRunE from --color and used by
+// every subcommand for human output. currentStyler() is nil-safe so a subcommand
+// invoked without the root pre-run (e.g. a direct unit test) still gets plain.
+var styler provenance.Styler
+
+func currentStyler() provenance.Styler {
+	if styler == nil {
+		return style.Disabled()
+	}
+	return styler
+}
 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
@@ -27,8 +40,21 @@ func newRootCmd() *cobra.Command {
 		Short:         "Layered env-file assembly for Docker Compose",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		// Resolve ONE styler for the whole invocation from --color (+ NO_COLOR /
+		// CLICOLOR_FORCE / TTY, handled by termenv). Stored in a package var so every
+		// subcommand uses the same decision; gated on os.Stdout (human output). The
+		// --json path swaps in style.Disabled() at its own call site (top precedence).
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			flag := "auto"
+			if f := cmd.Root().PersistentFlags().Lookup("color"); f != nil {
+				flag = f.Value.String()
+			}
+			styler = style.Resolve(flag, os.Stdout)
+			return nil
+		},
 	}
 	root.PersistentFlags().String("project-dir", "", "project directory (default: current directory)")
+	root.PersistentFlags().String("color", "auto", "colorize output: auto|always|never")
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the cenvkit version",
@@ -118,8 +144,9 @@ func newEnvFilesCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			s := currentStyler()
 			for _, f := range merged {
-				fmt.Fprintln(cmd.OutOrStdout(), f)
+				fmt.Fprintln(cmd.OutOrStdout(), s.Path(f)) // cyan on a TTY; plain when piped
 			}
 			return nil
 		},
@@ -195,6 +222,7 @@ func newValidateCmd() *cobra.Command {
 		Use:   "validate",
 		Short: "Validate the resolved compose config (docker compose config -q)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			s := currentStyler()
 			run := func(env string) error {
 				var ov []string
 				if env != "" {
@@ -215,7 +243,15 @@ func newValidateCmd() *cobra.Command {
 					dc.Env = append(dc.Env, "COMPOSE_ENV="+env) // also render ${COMPOSE_ENV} in compose files
 				}
 				dc.Stdout, dc.Stderr = os.Stdout, os.Stderr
-				return dc.Run()
+				if err := dc.Run(); err != nil {
+					return err // exit code preserved; main prints the error red
+				}
+				label := "config valid"
+				if env != "" {
+					label = env + " config valid"
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), s.Ok(label))
+				return nil
 			}
 			if all {
 				if err := run("dev"); err != nil {
@@ -282,6 +318,9 @@ func newEnvDebugCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if jsonOut {
+				// Top precedence (spec §5 rule 0): JSON is NEVER colored. RenderJSON
+				// emits no styling, so the machine output stays ANSI-free regardless
+				// of --color=always.
 				return provenance.RenderJSON(out, rep)
 			}
 			provenance.RenderHuman(out, rep, provenance.HumanOpts{
@@ -291,6 +330,7 @@ func newEnvDebugCmd() *cobra.Command {
 				ComposeEnv:       cr.ComposeEnv,
 				ComposeEnvSource: cr.ComposeEnvSource,
 				ProjectDir:       dir,
+				Style:            currentStyler(),
 			})
 			return nil
 		},
@@ -318,7 +358,28 @@ func pick(enabled bool, name string) string {
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "cenvkit:", err)
+		// Errors go to stderr in red (spec §4). Gate on STDERR's TTY (not stdout,
+		// which the PersistentPreRun styler used) and honor --color via a best-effort
+		// args scan — the pre-run may not have run if parsing itself failed.
+		es := style.Resolve(colorFlagFromArgs(os.Args), os.Stderr)
+		fmt.Fprintln(os.Stderr, es.ErrorMsg("cenvkit: "+err.Error()))
 		os.Exit(1)
 	}
+}
+
+// colorFlagFromArgs best-effort-extracts the --color value from raw args so error
+// coloring honors --color even when cobra parsing failed before PersistentPreRunE.
+// Defaults to "auto". Accepts `--color X` and `--color=X`.
+func colorFlagFromArgs(args []string) string {
+	for i, a := range args {
+		switch {
+		case a == "--color":
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+		case strings.HasPrefix(a, "--color="):
+			return strings.TrimPrefix(a, "--color=")
+		}
+	}
+	return "auto"
 }

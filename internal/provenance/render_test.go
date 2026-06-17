@@ -304,6 +304,147 @@ func TestRenderHuman_Overview_NotInDefaultMode(t *testing.T) {
 
 // ─── end --overview render tests ──────────────────────────────────────────────
 
+// ─── Styler / color tests ─────────────────────────────────────────────────────
+//
+// These tests exercise the HumanOpts.Style injection path:
+//   - nil Style (default, no field set) → plain output, byte-identical to pre-color
+//   - ansiStyler (a forced-ANSI fake) → ANSI escapes appear around styled elements
+//   - RenderJSON is NEVER colored regardless of the Style field
+//
+// ansiStyler is a test-only Styler implementation that wraps every call in a
+// recognisable ESC marker so tests can assert ANSI presence without needing
+// the real lipgloss renderer. It must match the Styler interface exactly:
+// marker/arrow methods take no argument and return the styled glyph; all
+// others take a string and return a styled string.
+type ansiStyler struct{}
+
+func (ansiStyler) Header(s string) string      { return "\x1b[H" + s + "\x1b[0m" }
+func (ansiStyler) MarkerNew() string           { return "\x1b[N+\x1b[0m" }
+func (ansiStyler) MarkerOverride() string      { return "\x1b[O~\x1b[0m" }
+func (ansiStyler) MarkerRepeat() string        { return "\x1b[R·\x1b[0m" }
+func (ansiStyler) Arrow() string               { return "\x1b[A→\x1b[0m" }
+func (ansiStyler) Key(s string) string         { return "\x1b[K" + s + "\x1b[0m" }
+func (ansiStyler) Value(s string) string       { return "\x1b[V" + s + "\x1b[0m" }
+func (ansiStyler) Old(s string) string         { return "\x1b[D" + s + "\x1b[0m" }
+func (ansiStyler) Path(s string) string        { return "\x1b[P" + s + "\x1b[0m" }
+func (ansiStyler) Service(s string) string     { return "\x1b[S" + s + "\x1b[0m" }
+func (ansiStyler) SourceLabel(s string) string { return "\x1b[L" + s + "\x1b[0m" }
+func (ansiStyler) Gap(s string) string         { return "\x1b[G" + s + "\x1b[0m" }
+func (ansiStyler) GapName(s string) string     { return "\x1b[GN" + s + "\x1b[0m" }
+func (ansiStyler) Ok(s string) string          { return "\x1b[OK" + s + "\x1b[0m" }
+func (ansiStyler) Fail(s string) string        { return "\x1b[F" + s + "\x1b[0m" }
+func (ansiStyler) Created(s string) string     { return "\x1b[C" + s + "\x1b[0m" }
+func (ansiStyler) Skipped(s string) string     { return "\x1b[SK" + s + "\x1b[0m" }
+func (ansiStyler) ErrorMsg(s string) string    { return "\x1b[E" + s + "\x1b[0m" }
+
+// compile-guard: ansiStyler must satisfy the Styler interface.
+var _ Styler = ansiStyler{}
+
+// TestRenderHuman_NilStyle_PlainOutput: existing HumanOpts with no Style set
+// (nil) must produce byte-identical plain output — the nil-safe st() helper
+// falls through to plainStyler{}. This is the zero-churn guarantee.
+func TestRenderHuman_NilStyle_PlainOutput(t *testing.T) {
+	var b bytes.Buffer
+	// Use overview mode (the most style-heavy path) with no Style field.
+	RenderHuman(&b, overviewReport(), HumanOpts{
+		Overview:         true,
+		ComposeEnv:       "dev",
+		ComposeEnvSource: ".env",
+		ProjectDir:       "/p",
+	})
+	got := b.String()
+	if strings.Contains(got, "\x1b") {
+		t.Fatalf("nil Style produced ANSI escapes — plain styler must be the default:\n%s", got)
+	}
+	// sanity: output is non-empty
+	if strings.TrimSpace(got) == "" {
+		t.Fatalf("nil Style produced empty overview output")
+	}
+}
+
+// TestRenderHuman_ANSIStyle_OverviewMarkers: a forced-ANSI styler injects
+// escape sequences around markers, the header, and the gap line in --overview.
+func TestRenderHuman_ANSIStyle_OverviewMarkers(t *testing.T) {
+	var b bytes.Buffer
+	RenderHuman(&b, overviewReport(), HumanOpts{
+		Overview:         true,
+		ComposeEnv:       "dev",
+		ComposeEnvSource: ".env",
+		ProjectDir:       "/p",
+		Style:            ansiStyler{},
+	})
+	got := b.String()
+
+	// ANSI must appear somewhere (basic guard)
+	if !strings.Contains(got, "\x1b") {
+		t.Fatalf("forced-ANSI Styler produced no escapes in --overview output:\n%s", got)
+	}
+	// The section header must be styled (wrapped by Header())
+	if !strings.Contains(got, "\x1b[H") {
+		t.Fatalf("forced-ANSI: header section not styled (no \\x1b[H prefix):\n%s", got)
+	}
+	// A marker (+ or ~) must carry ANSI (MarkerNew wraps with \x1b[N)
+	if !strings.Contains(got, "\x1b[N") && !strings.Contains(got, "\x1b[O") {
+		t.Fatalf("forced-ANSI: no marker escape (\\x1b[N or \\x1b[O) in --overview output:\n%s", got)
+	}
+	// The gap line must be styled (Gap() wraps with \x1b[G)
+	if !strings.Contains(got, "\x1b[G") {
+		t.Fatalf("forced-ANSI: gap line not styled (no \\x1b[G prefix):\n%s", got)
+	}
+}
+
+// TestRenderJSON_NoANSIEvenWithStyle: RenderJSON must never contain ANSI
+// escape sequences regardless of what Styler is in play (JSON is machine
+// output; the --json path always uses Disabled — this guards against any
+// accidental wiring of the human styler into RenderJSON).
+//
+// Simulated by building a Report that includes Layers and calling RenderJSON
+// — if the serializer ever touched the Styler, the output would contain \x1b.
+// RenderJSON does not take HumanOpts at all (it serializes the raw Report), so
+// this test is a regression guard against a future refactor wiring them.
+func TestRenderJSON_NoANSIEvenWithStyle(t *testing.T) {
+	var b bytes.Buffer
+	if err := RenderJSON(&b, overviewReport()); err != nil {
+		t.Fatal(err)
+	}
+	got := b.String()
+	if strings.Contains(got, "\x1b") {
+		t.Fatalf("RenderJSON output contains ANSI escape — JSON must always be plain:\n%s", got)
+	}
+}
+
+// TestRenderHuman_ANSIStyle_TraceInChain: forced-ANSI styler applies to the
+// --trace (in-chain) path: winner file should be styled as Path().
+func TestRenderHuman_ANSIStyle_TraceInChain(t *testing.T) {
+	var b bytes.Buffer
+	RenderHuman(&b, sampleReport(), HumanOpts{
+		Trace: "APP_PORT",
+		Style: ansiStyler{},
+	})
+	got := b.String()
+	if !strings.Contains(got, "\x1b") {
+		t.Fatalf("forced-ANSI Styler produced no escapes in --trace output:\n%s", got)
+	}
+}
+
+// TestRenderHuman_NilStyle_TraceUnchanged: nil Style on --trace must give the
+// same plain text as before the color feature (no-churn guard on trace path).
+func TestRenderHuman_NilStyle_TraceUnchanged(t *testing.T) {
+	var withNil bytes.Buffer
+	RenderHuman(&withNil, sampleReport(), HumanOpts{Trace: "APP_PORT"})
+	got := withNil.String()
+	if strings.Contains(got, "\x1b") {
+		t.Fatalf("nil Style --trace produced ANSI — must be plain:\n%s", got)
+	}
+	for _, want := range []string{"APP_PORT=8080", ".env", "ports[0]", "8080:80"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("nil Style --trace missing %q (regression):\n%s", want, got)
+		}
+	}
+}
+
+// ─── end Styler / color tests ─────────────────────────────────────────────────
+
 // TestRenderFiles_FullyOverriddenEnvFileStillListed: a service whose every
 // env_file: key is shadowed by an inline environment: entry must STILL appear
 // in the --files runtime-only group (N-3 guard).
