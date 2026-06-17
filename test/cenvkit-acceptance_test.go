@@ -1,6 +1,6 @@
-// Package acceptance ports the smoke-monorepo.sh (23 scenarios, 78 assertions after
-// v3 provenance recount + --overview additions) and smoke.sh suites to drive the
-// cenvkit binary directly.
+// Package acceptance ports the smoke-monorepo.sh (23 scenarios, 79 assertions after
+// v3 provenance recount + --overview additions + blueprint chain-override) and
+// smoke.sh suites to drive the cenvkit binary directly.
 //
 // Invocation map (replaces all ./docker / run_shim calls):
 //
@@ -1273,6 +1273,23 @@ func TestOverview_WEBPORTGap(t *testing.T) {
 	}
 	if !strings.Contains(out, "WEB_PORT") {
 		t.Fatalf("[overview-3] expected WEB_PORT in gap annotation:\n%s", out)
+	}
+}
+
+// [overview-4] chain override on the real blueprint: example.dev.env overrides
+// SITE_URL (defined in example.env), so the staged monorepo shows ~ for it.
+// Guards the blueprint fixture teaching purpose: the ~ marker must appear on
+// actual monorepo files, not just the scratch-fixture overview-1 test.
+func TestOverview_ChainOverrideOnMonorepo(t *testing.T) {
+	root := stageMonorepo(t)
+	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--overview")
+	if err != nil {
+		t.Fatalf("[overview-4] env-debug --overview: %v\n%s", err, out)
+	}
+	// overview-4: SITE_URL is defined in example.env (base) and overridden in
+	// example.dev.env (.dev.env when seeded) — must render as ~ SITE_URL.
+	if !strings.Contains(out, "~ SITE_URL") {
+		t.Fatalf("[overview-4] expected '~ SITE_URL' (chain override marker) in blueprint --overview:\n%s", out)
 	}
 }
 

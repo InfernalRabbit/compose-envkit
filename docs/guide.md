@@ -377,6 +377,7 @@ Interpolation chain (COMPOSE_ENV_FILES)
       + SITE_URL = example.com
   /app/.dev.env
       + IS_DEV = true
+      ~ SITE_URL = example.com → dev.example.com
 
 Runtime-only — service env_file: (NOT interpolated)
   web:
@@ -390,7 +391,8 @@ Runtime-only — service env_file: (NOT interpolated)
       but NOT in the Layer-1 chain → run falls back.
 ```
 
-Read it as: the chain (what feeds interpolation) sets `SITE_URL`/`IS_DEV`; `web`'s
+Read it as: the chain sets `SITE_URL` in `.env` and **overrides it** in `.dev.env`
+(the `~` marker — last-wins within the Layer-1 chain); `web`'s
 container gets `WEB_PORT=18080` from its `env_file:` but the inline `environment:`
 overrides it to the `${WEB_PORT:-0}` fallback (`0`) — and because `WEB_PORT` is
 not in the chain, every `${WEB_PORT}` in the YAML falls back at the run (the gap).
