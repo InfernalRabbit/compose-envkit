@@ -1,5 +1,5 @@
 // Package acceptance ports the smoke-monorepo.sh and smoke.sh suites to drive the
-// cenvkit binary directly. Current assertion count: 108.
+// cenvkit binary directly. Current assertion count: 111.
 //
 // Invocation map (replaces all ./docker / run_shim calls):
 //
@@ -32,11 +32,12 @@
 //	+1  blueprint chain-override SITE_URL (#10)
 //	+28 gap-report batch A/A2/B/B2/C2/D1–D4/E (#11)
 //	+1  corrected C1: --value on env_file-only var is empty (#11 follow-up)
+//	+3  #12: gap-value render-only strip guard + empty-chain hint acceptance
 //	────
-//	108 total
+//	111 total
 //
 // Note: TestC1_SinglePassLayerContract and TestD1_RuntimeFatalMissingRequired use
-// throwaway fixtures and guard contract seams — they are included in the 108 count.
+// throwaway fixtures and guard contract seams — they are included in the 111 count.
 package acceptance
 
 import (
@@ -970,6 +971,65 @@ func TestProvenance_Trace_WEB_PORT_JSON(t *testing.T) {
 		if !e.Gap {
 			t.Fatalf("[prov-2b] WEB_PORT effect.gap = false for effect %+v, want true", e)
 		}
+	}
+}
+
+// [#12 FIX 2+4] gap-value render-only strip guard: the HUMAN trace shows the
+// normalized fallback value ("0") but --json keeps the raw "WEB_PORT=0" so
+// machine consumers are not broken. RED if stripVarPrefix is applied to the Report
+// rather than at render time. (2 assertions)
+func TestProvenance_GapValue_RenderOnlyStrip(t *testing.T) {
+	root := stageMonorepo(t)
+
+	// strip-1: human --trace shows the stripped form: `resolves to "0"`
+	// (not `resolves to "WEB_PORT=0"`)
+	outHuman, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--trace", "--var", "WEB_PORT")
+	if err != nil {
+		t.Fatalf("[strip-1] --trace --var WEB_PORT: %v\n%s", err, outHuman)
+	}
+	if !strings.Contains(outHuman, `resolves to "0"`) {
+		t.Fatalf("[strip-1] human --trace must show normalized resolves to \"0\":\n%s", outHuman)
+	}
+
+	// strip-2: --json keeps the raw "WEB_PORT=0" in effects[].resolved (render-only strip)
+	outJSON, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--trace", "--var", "WEB_PORT", "--json")
+	if err != nil {
+		t.Fatalf("[strip-2] --trace --var WEB_PORT --json: %v\n%s", err, outJSON)
+	}
+	var rep provenanceReport
+	if err := json.Unmarshal([]byte(outJSON), &rep); err != nil {
+		t.Fatalf("[strip-2] JSON parse: %v\n%s", err, outJSON)
+	}
+	wp := rep.Vars["WEB_PORT"]
+	rawFound := false
+	for _, e := range wp.Effects {
+		if e.Field == "environment[0]" && e.Resolved == "WEB_PORT=0" {
+			rawFound = true
+		}
+	}
+	if !rawFound {
+		t.Fatalf("[strip-2] --json effects must keep raw \"WEB_PORT=0\" (render-only strip); effects: %+v", wp.Effects)
+	}
+}
+
+// [#12 FIX 3] empty-chain hint in --overview acceptance: a project with no
+// Layer-1 chain files emits the hint in the Interpolation chain section.
+// Uses a scratch fixture (no .env, no .docker-env-chain, one service env_file:).
+// (1 assertion)
+func TestEnvDebug_Overview_EmptyChainHint(t *testing.T) {
+	dir := t.TempDir()
+	// no .env and no .docker-env-chain → empty Layer-1 chain
+	os.MkdirAll(filepath.Join(dir, "web"), 0o755)
+	os.WriteFile(filepath.Join(dir, "web", ".web.env"), []byte("WEB_PORT=18080\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  web:\n    image: busybox\n    env_file: [web/.web.env]\n"), 0o644)
+
+	out, err := runCenvkit(t, dir, nil, "env-debug", "--overview")
+	if err != nil {
+		t.Fatalf("[ech-acc-1] env-debug --overview empty chain: %v\n%s", err, out)
+	}
+	const hint = "(none — no Layer-1 chain files present; run `cenvkit init` or add .env)"
+	if !strings.Contains(out, hint) {
+		t.Fatalf("[ech-acc-1] --overview must emit empty-chain hint:\n%s", out)
 	}
 }
 

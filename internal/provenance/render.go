@@ -31,6 +31,7 @@ type Styler interface {
 	SourceLabel(s string) string
 	Gap(s string) string     // gap line body — red
 	GapName(s string) string // the gapped var name — bold red
+	Hint(s string) string    // a dim advisory line (e.g. empty-chain hint) — dim
 	Ok(s string) string      // validate ok — green
 	Fail(s string) string    // validate fail — red
 	Created(s string) string // init created — green
@@ -56,6 +57,7 @@ func (plainStyler) Service(s string) string     { return s }
 func (plainStyler) SourceLabel(s string) string { return s }
 func (plainStyler) Gap(s string) string         { return s }
 func (plainStyler) GapName(s string) string     { return s }
+func (plainStyler) Hint(s string) string        { return s }
 func (plainStyler) Ok(s string) string          { return s }
 func (plainStyler) Fail(s string) string        { return s }
 func (plainStyler) Created(s string) string     { return s }
@@ -112,11 +114,22 @@ func RenderHuman(w io.Writer, r Report, o HumanOpts) {
 	case o.Overview:
 		renderOverview(w, r, o, s)
 	default: // Chain == default view: Layer-1 only (Report.ChainFiles)
+		if len(r.ChainFiles) == 0 {
+			fmt.Fprintln(w, s.Hint(emptyChainHint))
+			return
+		}
 		for _, f := range r.ChainFiles {
 			fmt.Fprintln(w, s.Path(f))
 		}
 	}
 }
+
+// emptyChainHint is the dim advisory shown in the human env-debug views when the
+// Layer-1 interpolation chain has ZERO existing files — otherwise those views print
+// an empty section that reads as broken (FIX 1). Kept neutral (does not assume
+// example.* exist). NOT emitted by the `env-files` command (machine output: an
+// empty stdout is correct for piping).
+const emptyChainHint = "(none — no Layer-1 chain files present; run `cenvkit init` or add .env)"
 
 // renderTrace prints one variable's story. Post-v3 it is gap-aware: a var present
 // in the interpolation (Layer-1) chain renders the normal winner/overridden/effects
@@ -137,7 +150,7 @@ func renderTrace(w io.Writer, r Report, name string, s Styler) {
 			fmt.Fprintf(w, "  overridden: %s (%s)\n", s.Path(src.File), s.SourceLabel(src.Layer))
 		}
 		for _, e := range vt.Effects {
-			fmt.Fprintf(w, "  effect:     service %s field %s -> %s\n", s.Service(e.Service), e.Field, s.Value(e.Resolved))
+			fmt.Fprintf(w, "  effect:     service %s field %s -> %s\n", s.Service(e.Service), e.Field, s.Value(stripVarPrefix(name, e.Resolved)))
 		}
 		return
 	}
@@ -151,7 +164,7 @@ func renderTrace(w io.Writer, r Report, name string, s Styler) {
 	if vt.Gap {
 		for _, e := range vt.Effects {
 			fmt.Fprintf(w, "  %s\n", s.Gap(fmt.Sprintf("⚠ gap: ${%s} used in service %s %s resolves to %q at the run, NOT the env_file value (defined only in a service env_file).",
-				name, e.Service, e.Field, e.Resolved)))
+				name, e.Service, e.Field, stripVarPrefix(name, e.Resolved))))
 		}
 		fmt.Fprintf(w, "  fix:   add %s to the Layer-1 chain (e.g. .env), or use it runtime-only.\n", name)
 	}
@@ -162,6 +175,9 @@ func renderTrace(w io.Writer, r Report, name string, s Styler) {
 // paths grouped by service, NOT interpolated — container env only).
 func renderFiles(w io.Writer, r Report, s Styler) {
 	fmt.Fprintln(w, s.Header("interpolation (COMPOSE_ENV_FILES):"))
+	if len(r.Files) == 0 {
+		fmt.Fprintf(w, "  %s\n", s.Hint(emptyChainHint)) // FIX 1
+	}
 	for _, f := range r.Files {
 		fmt.Fprintf(w, "  %s\n", s.Path(f))
 	}
@@ -213,12 +229,17 @@ func renderOverview(w io.Writer, r Report, o HumanOpts, s Styler) {
 	fmt.Fprintln(w, "\n"+s.Header("Interpolation chain (COMPOSE_ENV_FILES)"))
 	fmt.Fprintf(w, "  %s new   %s override   %s repeat\n", s.MarkerNew(), s.MarkerOverride(), s.MarkerRepeat())
 	chainAcc := map[string]string{}
+	chainLayers := 0
 	for _, l := range r.Layers {
 		if l.Layer != "layer1" {
 			continue
 		}
+		chainLayers++
 		fmt.Fprintf(w, "\n  %s\n", s.Path(l.File))
 		renderLayerEntries(w, l.Entries, chainAcc, s)
+	}
+	if chainLayers == 0 {
+		fmt.Fprintf(w, "\n  %s\n", s.Hint(emptyChainHint)) // FIX 1
 	}
 
 	// Section 2 — runtime-only, per service (fresh accumulator each). Suppressed
@@ -327,7 +348,7 @@ func renderServiceGaps(w io.Writer, r Report, service string, s Styler) {
 			if e.Service == service {
 				fields = append(fields, e.Field)
 				if fallback == "" {
-					fallback = e.Resolved // the run's actual fallback value (N-2)
+					fallback = stripVarPrefix(name, e.Resolved) // run's fallback, normalized (FIX 2)
 				}
 			}
 		}
@@ -339,6 +360,20 @@ func renderServiceGaps(w io.Writer, r Report, service string, s Styler) {
 			s.GapName(name), name, service, strings.Join(fields, ", "))))
 		fmt.Fprintf(w, "    %s\n", s.Gap(fmt.Sprintf("  but NOT in the Layer-1 chain → run falls back to %q.", fallback)))
 	}
+}
+
+// stripVarPrefix normalizes a resolved value for HUMAN display: a list-form
+// `environment: ["NAME=${NAME:-0}"]` entry resolves to the whole "NAME=0" (the leaf
+// includes the key), while map-form `environment: {NAME: ...}` resolves to bare
+// "0". Strip a leading "NAME=" so both render the same value (FIX 2). Only the
+// exact "<name>=" prefix is stripped — a non-environment leaf like ports "0:80"
+// (no "<name>=") is left untouched. The stored Report.Effect.Resolved keeps the raw
+// value (for --json); this strip is render-time only.
+func stripVarPrefix(name, resolved string) string {
+	if p := name + "="; strings.HasPrefix(resolved, p) {
+		return resolved[len(p):]
+	}
+	return resolved
 }
 
 // renderEffective prints each service's effective env. Entries are pre-sorted by

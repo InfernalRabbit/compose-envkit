@@ -48,6 +48,7 @@ type Lipgloss struct {
 	sourceLabel lipgloss.Style
 	gap         lipgloss.Style
 	gapName     lipgloss.Style
+	hint        lipgloss.Style
 	ok          lipgloss.Style
 	fail        lipgloss.Style
 	created     lipgloss.Style
@@ -73,6 +74,7 @@ func newLipgloss(r *lipgloss.Renderer) *Lipgloss {
 		sourceLabel: ns().Faint(true),
 		gap:         ns().Foreground(colRed),
 		gapName:     ns().Bold(true).Foreground(colRed),
+		hint:        ns().Faint(true),
 		ok:          ns().Foreground(colGreen),
 		fail:        ns().Foreground(colRed),
 		created:     ns().Foreground(colGreen),
@@ -94,6 +96,7 @@ func (l *Lipgloss) Service(s string) string     { return l.service.Render(s) }
 func (l *Lipgloss) SourceLabel(s string) string { return l.sourceLabel.Render(s) }
 func (l *Lipgloss) Gap(s string) string         { return l.gap.Render(s) }
 func (l *Lipgloss) GapName(s string) string     { return l.gapName.Render(s) }
+func (l *Lipgloss) Hint(s string) string        { return l.hint.Render(s) }
 func (l *Lipgloss) Ok(s string) string          { return l.ok.Render(s) }
 func (l *Lipgloss) Fail(s string) string        { return l.fail.Render(s) }
 func (l *Lipgloss) Created(s string) string     { return l.created.Render(s) }

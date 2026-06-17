@@ -336,6 +336,7 @@ func (ansiStyler) Fail(s string) string        { return "\x1b[F" + s + "\x1b[0m"
 func (ansiStyler) Created(s string) string     { return "\x1b[C" + s + "\x1b[0m" }
 func (ansiStyler) Skipped(s string) string     { return "\x1b[SK" + s + "\x1b[0m" }
 func (ansiStyler) ErrorMsg(s string) string    { return "\x1b[E" + s + "\x1b[0m" }
+func (ansiStyler) Hint(s string) string        { return "\x1b[HT" + s + "\x1b[0m" }
 
 // compile-guard: ansiStyler must satisfy the Styler interface.
 var _ Styler = ansiStyler{}
@@ -444,6 +445,74 @@ func TestRenderHuman_NilStyle_TraceUnchanged(t *testing.T) {
 }
 
 // ─── end Styler / color tests ─────────────────────────────────────────────────
+
+// ─── empty-chain hint render tests (#12 FIX 1) ───────────────────────────────
+
+// emptyChainHintText is the exact string emitted by render.go when no Layer-1
+// files are present. Declared here so a rename in render.go breaks the compile,
+// not silently lets the test pass on an empty string.
+const emptyChainHintText = "(none — no Layer-1 chain files present; run `cenvkit init` or add .env)"
+
+// emptyChainReport returns a Report with no Layer-1 chain files but a single
+// runtime service, exercising every code path that emits emptyChainHint.
+func emptyChainReport() Report {
+	return Report{
+		Files:      []string{},
+		ChainFiles: []string{},
+		Services: []ServiceEnv{{
+			Service:  "web",
+			EnvFiles: []string{"/p/web/.web.env"},
+			Entries:  []EnvEntry{{Key: "WEB_PORT", Value: "18080", Source: Source{File: "/p/web/.web.env", Layer: "env_file"}}},
+		}},
+		Layers: []OverviewLayer{{
+			File: "/p/web/.web.env", Layer: "env_file", Service: "web",
+			Entries: []OverviewEntry{{Key: "WEB_PORT", RawValue: "18080"}},
+		}},
+	}
+}
+
+// TestRenderHuman_EmptyChain_Overview: --overview on a chain-less project emits
+// the hint in the Interpolation chain section. (2 assertions)
+func TestRenderHuman_EmptyChain_Overview(t *testing.T) {
+	var b bytes.Buffer
+	RenderHuman(&b, emptyChainReport(), HumanOpts{
+		Overview:   true,
+		ProjectDir: "/p",
+	})
+	got := b.String()
+	// ech-unit-1: hint text present in --overview output
+	if !strings.Contains(got, emptyChainHintText) {
+		t.Fatalf("[ech-unit-1] --overview empty-chain hint missing:\n%s", got)
+	}
+	// ech-unit-2: the runtime section still renders (hint does not swallow it)
+	if !strings.Contains(got, "web") {
+		t.Fatalf("[ech-unit-2] --overview runtime section absent after empty-chain hint:\n%s", got)
+	}
+}
+
+// TestRenderHuman_EmptyChain_Files: --files on a chain-less project emits
+// the hint under the interpolation group header. (1 assertion)
+func TestRenderHuman_EmptyChain_Files(t *testing.T) {
+	var b bytes.Buffer
+	RenderHuman(&b, emptyChainReport(), HumanOpts{Files: true})
+	got := b.String()
+	if !strings.Contains(got, emptyChainHintText) {
+		t.Fatalf("[ech-unit-3] --files empty-chain hint missing:\n%s", got)
+	}
+}
+
+// TestRenderHuman_EmptyChain_Chain: --chain on a chain-less project emits
+// the hint as the only output line. (1 assertion)
+func TestRenderHuman_EmptyChain_Chain(t *testing.T) {
+	var b bytes.Buffer
+	RenderHuman(&b, emptyChainReport(), HumanOpts{Chain: true})
+	got := strings.TrimSpace(b.String())
+	if got != emptyChainHintText {
+		t.Fatalf("[ech-unit-4] --chain empty-chain output = %q, want exact hint text", got)
+	}
+}
+
+// ─── end empty-chain hint render tests ───────────────────────────────────────
 
 // TestRenderFiles_FullyOverriddenEnvFileStillListed: a service whose every
 // env_file: key is shadowed by an inline environment: entry must STILL appear
