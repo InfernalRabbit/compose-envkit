@@ -44,3 +44,11 @@ files owned/edited by different agents in the same window, and I staged only two
   named — package-level `*_test.go` (internal/**) needed the v3 updates too, not
   just the `test/` acceptance suite. When a behavior contract changes, sweep ALL
   `*_test.go`, and make the gate a full `go test ./...`, not just the acceptance dir.
+- **A teammate "green" under `SMOKE_SKIP_DOCKER=1` is NOT full green.** Teammates
+  (esp. sandboxed ones) default to `SMOKE_SKIP_DOCKER=1`, which *skips* the
+  docker-gated acceptance tests — so a docker-gated assertion can be authored but
+  never executed under the new behavior. 2026-06-17: `TestScenario3` assertion 3.3
+  greped for a literal `:-0` that `docker compose config` resolves away
+  (`published: "0"`) — it only failed when *I* ran the docker path. The lead MUST
+  run the docker-gated suite (`go test ./test/...` with docker up) before
+  integrating, never trust a SMOKE_SKIP_DOCKER "green" as the final gate.
