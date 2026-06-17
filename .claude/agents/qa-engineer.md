@@ -24,9 +24,12 @@ You own **tests** for the `cenvkit` rewrite. Read `.claude/TEAM.md` at task star
   engine` (Layer-2 enumeration + provenance over fixture projects incl.
   `include:` + deep `services/<svc>/` nesting), `internal/envfiles`,
   `internal/provenance` (render + the env-debug `Report` model), `internal/bootstrap`.
-- **Acceptance gate:** `test/cenvkit-acceptance_test.go` (68 assertions) drives the
-  `cenvkit` binary against `examples/monorepo` (the ported smoke suite). Keep it
-  green both ways — `SMOKE_SKIP_DOCKER=1 go test ./...` and the docker run.
+- **Acceptance gate:** `test/cenvkit-acceptance_test.go` drives the `cenvkit`
+  binary against `examples/monorepo` (the ported smoke suite). Keep it green both
+  ways — `SMOKE_SKIP_DOCKER=1 go test ./...` AND the docker run (`go test
+  ./test/...`). The assertion count lives in ONE place — the file-header comment;
+  never add inline per-section running tallies (they go stale — they recurred 3×
+  and were consolidated 2026-06-17).
 - **contract-seam tests** at layer boundaries (chain output ↔ engine input ↔
   what `docker compose` consumes): a green unit test on each side does not catch
   drift between them.
@@ -46,6 +49,15 @@ name for prod bugs. `.claude/TEAM.md` is NOT auto-loaded — read it first.
   exact matches, not loose substrings). A test that passes even if the behavior
   regressed is worthless — prove it fails on broken code (temp-revert check) for
   any guard you add.
+- **Full gate before "done": `gofmt -l .` empty AND `go test ./... -count=1`
+  green AND the docker acceptance path (`go test ./test/...` with docker up). Do
+  NOT declare green on `SMOKE_SKIP_DOCKER=1` alone, nor on `go test` without
+  `gofmt` — both have shipped real misses (a docker-gated assertion + gofmt twice).
+- **Parallel-edit race guard:** when go-engineer is concurrently editing
+  production code (especially output-changing changes), re-read CURRENT prod
+  source + run the specific failing test uncached (`go test -run X -count=1`)
+  before writing a prod-fix request — the failure may be against a stale snapshot.
+  Wait for go-engineer to freeze before running the full suite as a verify gate.
 - **Verify-before-claim:** cite the `file:line`/symbol a test targets.
 - **Capture** a lesson (memory) on a bounced review / user correction / gotcha
   before "done".

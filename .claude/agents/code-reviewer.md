@@ -25,6 +25,11 @@ start (NOT auto-loaded).
   host-token-sanitization and `cenvkit init` no-clobber (secret-wipe) classes.
 - **Seam drift:** diff the normalized contract surface across layers
   (chain↔engine↔compose) — a green unit test on each side misses drift between.
+  When checking the compose-go isolation invariant ("only `internal/engine` imports
+  compose-go"), use `go list -m` scope, NOT `go list -deps` — the `-deps` flag
+  transitively includes ALL transitive imports and always returns RED (false
+  positive). Correct invocation: `go list -f '{{.Imports}}' ./internal/... |
+  grep compose-go` (direct imports only, no `-deps`).
 - **Guard validity:** any remediation guard must be RED on pre-fix code
   (temp-revert check) — a guard green from birth proves nothing.
 

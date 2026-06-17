@@ -9,12 +9,9 @@ bodies + the spawn prompt.
 | Agent | Owns | Off-limits |
 |---|---|---|
 | architect (lead) | `.claude/`, `docs/`, planning, ALL git surgery, synthesis | editing code (read-only) |
-| go-engineer | `cmd/cenvkit/`, `internal/**`, `go.mod`, `go.sum` | `*_test.go`, `test/`, docs, legacy sh kit |
+| go-engineer | `cmd/cenvkit/`, `internal/**`, `go.mod`, `go.sum` | `*_test.go`, `test/`, docs |
 | qa-engineer | `**/*_test.go`, `test/` (Go + ported smoke acceptance) | prod code (report to go-engineer) |
 | code-reviewer | `.claude/artifacts/` (report only) | editing anything (read-only) |
-
-Legacy sh kit (`lib/ mk/ bin/docker templates/ install.sh test/smoke*.sh
-test/lint.sh`) = frozen parity reference; touch only on lead direction.
 
 ## Model policy (approved by user 2026-06-15)
 
@@ -113,11 +110,33 @@ expensive verification against a reported hash, ensure the teammate is frozen on
 it; re-check `HEAD == verified hash` before pushing. (No submodules here — plain
 git.)
 
+**Committed-tree rule (2026-06-16):** when staging only a subset of the working
+tree during multi-agent flux, verify the COMMITTED state, not the working tree.
+After `git add <subset>`: `git stash -u && go test ./... -count=1 && git stash
+pop`. A green working-tree test while other agents are editing can hide a broken
+staged subset. Freeze ALL teammates before running a "final" verify — a raced
+verify yields stale, misleading results.
+
 ## blockedBy / completed discipline
 
 Don't start or commit a `blockedBy` task without asking the lead. `completed` only
 with FULL DoD — a half-done task stays `in_progress` with a note ("will close
 after X" is NOT completed).
+
+## Integration sequencing & report fidelity (lessons 2026-06-17)
+
+- **Output-changing prod edits → SEQUENCE, don't parallelize.** When a prod change
+  alters human/CLI output that tests assert (e.g. a renderer tweak), have the impl
+  agent land + freeze + report the EXACT new output FIRST, then cue qa to match
+  tests to it. Running both in parallel makes existing tests red mid-flight (a
+  render-vs-test race that bit us). Pure-additive prod (new symbols, no output
+  change) may run parallel with test authoring.
+- **Reports must reflect the SHIPPED disk state, not prior messages.** A completion
+  report that repeats a stale comment/number contradicting the actual code burns a
+  verify cycle. Pin claims to what's on disk now.
+- **Lead verifies on DISK, never on the report.** Every "green/done" is re-checked
+  by the lead with the full gate (CLAUDE.md "Full gate") on the frozen tree before
+  commit — this caught a docker-gated miss + gofmt twice + a stale count this round.
 
 ## Definition of Done — bands
 

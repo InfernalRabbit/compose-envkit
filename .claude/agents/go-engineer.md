@@ -46,6 +46,14 @@ session** (seen in the dry-run), fall back to a verified primary-source probe �
 ## Quality gates (before "done")
 - Self-review your diff: nil/empty handling, error paths, boundary inputs, a
   testable seam, no duplicate logs/errors.
+- **`gofmt -l .` must be empty** before reporting done. Run it explicitly — `go
+  build`/`go test` do NOT catch gofmt violations, and this has shipped twice
+  (once via test file, once via prod file). If dirty: `gofmt -w <file>`.
+- **Output-changing edits: sequence, don't parallelize.** If your change alters
+  human/CLI output that acceptance tests assert (renderer tweaks, label changes),
+  finish + freeze FIRST, then signal qa to update tests — running both in parallel
+  makes tests transiently red and pollutes verify runs (render-vs-test race,
+  2026-06-17).
 - **Verify-before-claim:** any statement about a helper/API/contract cites a
   `file:line` you actually opened (or ask the owner) — no guessing.
 - **Fix what you broke:** a red test caused by your change is yours.

@@ -33,6 +33,12 @@ Teammates squash work into ONE coherent commit and report `hash` + `git diff
 re-check `HEAD == verified hash` right before pushing. Group commits by whole
 files (`git add <files>`, never `add -A`; `git add -p` is unavailable).
 
+**Committed-tree rule:** when staging a subset during multi-agent flux, verify
+the staged tree, not just the working tree: `git stash -u && go test ./...
+-count=1 && git stash pop`. A working-tree pass while other agents are editing
+can hide a broken staged subset (shipped broken HEAD 2026-06-16). Freeze ALL
+teammates before the final verify — a raced verify yields stale results.
+
 ## Risk gates
 - **Plan-approval:** for risky work (security, migrations, the compose-go engine
   contract, anything hard to reverse) spawn a **fresh** teammate in plan-mode

@@ -24,10 +24,16 @@ removed — cenvkit is the only implementation. Spec:
 
 ## Verification commands
 
-- Go: `go build ./...` · `go test ./...` · `go vet ./...` · `gofmt -l .`
-  (and `golangci-lint run` if installed).
-- Acceptance: `sh test/smoke-monorepo.sh` (drives the `cenvkit` binary; must stay
-  green).
+- Go: `go build ./...` · `go vet ./...` · `gofmt -l .` (must be empty) ·
+  `go test ./... -count=1` (and `golangci-lint run` if installed).
+- Acceptance: `go test ./test/...` — docker-gated, drives the `cenvkit` binary
+  against `examples/monorepo` (the ported smoke suite); also run with
+  `SMOKE_SKIP_DOCKER=1` for the no-docker subset.
+- **Full gate before declaring green / integrating:** `gofmt -l .` empty AND
+  `go test ./... -count=1` AND the docker acceptance path (`go test ./test/...`
+  with docker up). NEVER report green on `SMOKE_SKIP_DOCKER=1` alone, nor on
+  `go test` without `gofmt` — both have shipped real misses (a docker-gated
+  assertion unrun under a behavior change; gofmt, twice).
 
 ## Conventions
 
