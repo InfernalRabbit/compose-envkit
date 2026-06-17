@@ -90,4 +90,27 @@ type Report struct {
 	ChainFiles []string            `json:"chain_files"`        // Layer-1 chain order (kept for the --chain path; D2)
 	Vars       map[string]VarTrace `json:"vars"`               // A + B-lite + gap (InChain/RuntimeDefs/Gap)
 	Services   []ServiceEnv        `json:"services,omitempty"` // C (also the runtime-only group for --files)
+	Layers     []OverviewLayer     `json:"layers,omitempty"`   // ordered raw per-file layers for --overview (populated only when WantLayers)
+}
+
+// OverviewEntry is one KEY=VALUE line of a file, captured LITERALLY in declaration
+// order for the --overview lens: RawValue is exactly as written, with ${...} left
+// UNexpanded (resolved values are --effective's job). Sourced from a thin ordered
+// line read, NOT compose-go's dotenv parser (which is unordered and expands refs).
+type OverviewEntry struct {
+	Key      string `json:"key"`
+	RawValue string `json:"raw_value"` // literal as written; ${...} unexpanded
+}
+
+// OverviewLayer is one file (or the inline-environment pseudo-layer) contributing
+// to the layering overview, with its raw entries in declaration order. Layers are
+// ordered on the Report: all Layer-1 chain files (chain order) first, then per
+// active service (sorted) its env_file: layers (declared order) followed by its
+// inline-environment layer. The +/~/· markers are NOT stored — they are derived at
+// render time from an accumulator walk.
+type OverviewLayer struct {
+	File    string          `json:"file"`              // abs path, or "(inline environment:)"
+	Layer   string          `json:"layer"`             // "layer1" | "env_file" | "environment"
+	Service string          `json:"service,omitempty"` // "" for chain; service name for runtime layers
+	Entries []OverviewEntry `json:"entries"`           // declaration order
 }

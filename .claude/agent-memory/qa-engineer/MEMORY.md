@@ -7,3 +7,6 @@
 - [YAML flow seq interpolation](yaml-flow-seq-interpolation.md) — `${VAR}` inside YAML flow sequences breaks the parser; use block form
 - [Secrets-last scope](secrets-last-scope.md) — secrets-last is Layer-1 only; assert via --chain, not env-files merged output
 - [InChain not set in chain-only mode](inchain-chain-only-mode.md) — provenance.go early return skips gap-detection; InChain=false for all vars in chain-only mode
+- [Overview gap text in render tests](overview-gap-text-in-render.md) — renderOverview gap line contains "NOT in the Layer-1 chain"; check for `interpolation:` prefix to distinguish trace-mode text; example.dev.env only has IS_DEV=true
+- [Service dotfiles are git-tracked](service-dotfiles-are-tracked.md) — web/.web.env etc. are tracked and staged by stageMonorepo cp -R; only root .env/.dev.env are gitignored/seeded; never overwrite service dotfiles with stubs
+- [DoD gate: gofmt -l . must be clean](dod-gate-gofmt.md) — go test alone is not enough; always run `gofmt -l . && go test ./... -count=1` before re-freezing

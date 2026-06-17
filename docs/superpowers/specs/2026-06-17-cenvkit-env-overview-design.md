@@ -86,8 +86,12 @@ Runtime-only — service env_file: (NOT interpolated)
 - **`internal/engine`** (the only compose-go importer) populates a new ordered,
   raw, per-file structure on the `Report` — chain (Layer-1) files first, then per
   active service its `env_file:` layers + an `inline environment:` pseudo-layer.
-  Reuses the loads it already does in `Provenance`; the new work is capturing
-  **ordered literal entries** per file (see §6 mechanism).
+  It **reuses the existing Provenance loads only for *discovery*** (which chain
+  files, which services, which `env_file:` paths, in what order); the per-file
+  **entries are captured by a NEW ordered raw line read** — the existing
+  dotenv-parsed `parsed[i]` is unordered AND `${...}`-expanded (probe-confirmed,
+  §6), so it cannot feed the literal+ordered lens. The line reader is stdlib-only
+  (pure Go) and lives in `internal/engine`, preserving the seam.
 - **`internal/provenance`** (pure Go) computes the `+/~/·` markers by walking the
   layers with an accumulator (one for the chain section; a fresh one per service in
   the runtime section) and renders the human output; `--json` serializes the
@@ -162,6 +166,37 @@ it stays `omitempty`-clean for other modes' JSON only if empty, so populate lazi
   `.web.env` + `.web.dev.env`; the `WEB_PORT` gap line appears). Count re-pinned in
   the plan with lead sign-off; header comments bumped in the same commit.
 - All overview tests are daemon-free.
+
+## 8a. Plan-review decisions (architect sign-off, 2026-06-17)
+
+Resolutions on the plan-mode review (plan: `.claude/artifacts/2026-06-17-env-overview-plan.md`):
+
+- **Probe verdict (§6) confirmed:** `dotenv` is unordered AND expands `${...}` →
+  a thin ordered `KEY=VALUE` line reader in `internal/engine` is REQUIRED (not
+  optional). It mirrors dotenv's surface tokenization for KEYS (skip blank/`#`;
+  strip leading `export `; split first `=`; strip one matching quote pair; key
+  charset `[A-Za-z0-9_.-]`) but takes the VALUE verbatim — no `${}` expansion, no
+  escape processing.
+- **D-A (populate gating): GATE behind `ProvInput.WantLayers`** (NOT always).
+  Populate `Report.Layers` only on the `--overview` path. Keeps existing
+  `--chain`/`--effective`/`--trace`/`--value` `--json` output byte-identical (no
+  golden churn) and avoids bloating focused modes with the full layer dump.
+- **D-B (unquoted trailing `#` trim): YES** — the line reader trims an unquoted
+  trailing ` # comment` (mirrors dotenv `parser.go:157-159`) so a value isn't shown
+  with comment text; quoted values and everything else stay verbatim.
+- **Header source label: INCLUDE.** Add `ComposeEnvSource string` to
+  `chain.Result` and tag the branch in `resolveComposeEnv` (shell `COMPOSE_ENV` /
+  root `.env` / default `"dev"`); the header renders `COMPOSE_ENV = <value> (from
+  <source>)`. (Touches `internal/chain` — go-engineer zone; additive, with a chain
+  unit test.) This matches the sh kit's `dev (from .env)` the overview is restoring.
+- **Project name in header:** use the project dir basename (cmd passes the dir);
+  do NOT add an engine field for the resolved compose project name (YAGNI).
+- **Count:** target **N=78** (75 + 3 overview acceptance assertions). qa reconciles
+  the exact PASS-site tally and bumps the header comments in the same commit; lead
+  signs off at integration.
+- **Feasibility:** implementable as written with the §3 tightening above; no other
+  spec corrections. Seam preserved; determinism met; gap lines are pure
+  presentation over existing `Vars[].Gap`/`Effects`/`RuntimeDefs`.
 
 ## 8. Non-goals
 

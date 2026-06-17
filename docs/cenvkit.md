@@ -93,7 +93,7 @@ go build -o .cenvkit.bin ./cmd/cenvkit   # .cenvkit.bin is gitignored
 |---|---|
 | `cenvkit compose <args>` | assemble the Layer-1 chain, `exec docker compose <args>` (the core) |
 | `cenvkit env-files` | print the resolved `COMPOSE_ENV_FILES` (**Layer 1 only**), one path per line |
-| `cenvkit env-debug [--trace --var V\|--effective [--service S]\|--value --var V\|--chain\|--files] [--json]` | daemon-free debugger / gap-detector |
+| `cenvkit env-debug [--trace --var V\|--effective [--service S]\|--value --var V\|--chain\|--files\|--overview] [--json]` | daemon-free debugger / gap-detector |
 | `cenvkit validate [--all]` | `docker compose config -q`; `--all` validates dev AND prod |
 | `cenvkit init` | seed `.X` from `example.X` (**no-clobber**), fan out one directory level |
 | `cenvkit version` | print the version |
@@ -117,7 +117,14 @@ NO `docker compose` shell-out:
 - `--chain` (default) — the Layer-1 chain files (secrets last). `--files` — **two
   groups**: *interpolation* (= `COMPOSE_ENV_FILES`, Layer 1) and *runtime-only*
   (each service's declared `env_file:` paths, NOT interpolated).
-- `--json` — the structured provenance `Report` for any mode (tooling/CI).
+- `--overview` — a per-file **layering** view: the interpolation chain walked file
+  by file with markers `+` new / `~` override (`old → new`) / `·` repeat (raw
+  literal values, `${...}` unexpanded), then per-service `env_file:` layers + an
+  `inline environment:` final layer (inline wins), with `⚠ gap:` lines for vars
+  referenced as `${VAR}` but defined only in a service `env_file:`. Restores the
+  sh kit's `env-debug-diff` overview, correct under v3.
+- `--json` — the structured provenance `Report` for any mode (tooling/CI);
+  `--overview --json` adds the `layers` array.
 
 `--trace` effects are reported for **service fields only** (`services.<name>.<field>`);
 `${VAR}` in top-level `networks:`/`volumes:`/`x-*` is out of scope (the var still

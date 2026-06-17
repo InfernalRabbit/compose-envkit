@@ -116,6 +116,65 @@ func TestChainOrderingAndEnvSwitch(t *testing.T) {
 	}
 }
 
+// TestResolveComposeEnvSource: the three branches of resolveComposeEnv
+// (chain.go:92-103) correctly tag ComposeEnvSource as "shell" | ".env" |
+// "default", and ComposeEnv carries the corresponding resolved value.
+// RED on a mislabel (e.g. "shell" when reading from .env, or "default" when
+// the shell has the var set).
+func TestResolveComposeEnvSource(t *testing.T) {
+	tests := []struct {
+		name           string
+		osEnv          []string // injected OS environment
+		dotEnvBody     string   // body for the root .env (empty = do not create)
+		wantComposeEnv string
+		wantSource     string
+	}{
+		{
+			name:           "shell COMPOSE_ENV → source=shell",
+			osEnv:          []string{"COMPOSE_ENV=staging"},
+			dotEnvBody:     "COMPOSE_ENV=dev\n", // .env also has it; shell wins
+			wantComposeEnv: "staging",
+			wantSource:     "shell",
+		},
+		{
+			name:           "no shell, COMPOSE_ENV in .env → source=.env",
+			osEnv:          []string{},
+			dotEnvBody:     "COMPOSE_ENV=prod\n",
+			wantComposeEnv: "prod",
+			wantSource:     ".env",
+		},
+		{
+			name:           "no shell, no .env → source=default",
+			osEnv:          []string{},
+			dotEnvBody:     "", // no .env created
+			wantComposeEnv: "dev",
+			wantSource:     "default",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.dotEnvBody != "" {
+				writeFile(t, dir, ".env", tc.dotEnvBody)
+			}
+			res, err := Resolve(Input{
+				ProjectDir: dir,
+				OSEnv:      tc.osEnv,
+				Hostname:   func() (string, error) { return "testhost", nil },
+			})
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if res.ComposeEnv != tc.wantComposeEnv {
+				t.Fatalf("ComposeEnv = %q, want %q", res.ComposeEnv, tc.wantComposeEnv)
+			}
+			if res.ComposeEnvSource != tc.wantSource {
+				t.Fatalf("ComposeEnvSource = %q, want %q", res.ComposeEnvSource, tc.wantSource)
+			}
+		})
+	}
+}
+
 func TestHostTokenEqualsHostnameToken(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, ".docker-env-chain", ".env\n.${HOST}.env\n")

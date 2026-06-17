@@ -155,6 +155,7 @@ structured report (tooling/CI).
 |---|---|
 | `--chain` (default) | the Layer-1 chain files, in load order (secrets last) |
 | `--files` | two groups: interpolation (`COMPOSE_ENV_FILES`, Layer 1) + runtime-only (service `env_file:` paths) |
+| `--overview` | per-file layering walk (`+`/`~`/`·` markers, raw values) + per-service `env_file:` layers + `inline environment:`, with `⚠ gap` lines |
 | `--effective [--service S]` | each service's effective env, with the source of every value (`env_file:` vs inline `environment:`) |
 | `--trace --var NAME` | NAME's chain winner + where `${NAME}` took effect — or the **gap** (NAME is only in a service `env_file:`, so the run falls back) |
 | `--value --var NAME` | NAME's winning value, one line (for scripts) |

@@ -1,9 +1,12 @@
 package engine
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"os"
 	"sort"
+	"strings"
 
 	"github.com/compose-spec/compose-go/v2/cli"
 	"github.com/compose-spec/compose-go/v2/dotenv"
@@ -26,6 +29,7 @@ type ProvInput struct {
 	Env         []string // chain Vars "K=V" (interpolation + mapping source)
 	Profiles    []string
 	EnvFiles    []ProvFile // ordered merged COMPOSE_ENV_FILES (for A attribution)
+	WantLayers  bool       // populate Report.Layers (the raw ordered --overview lens); off by default to keep other modes' JSON unchanged (D-A)
 }
 
 // parseDotEnv uses compose-go's own dotenv parser (docker-compose parity).
@@ -36,6 +40,74 @@ type ProvInput struct {
 // chain-provided vars are silenced.
 func parseDotEnv(path string, lookup dotenv.LookupFn) (map[string]string, error) {
 	return dotenv.ReadFile(path, lookup)
+}
+
+// parseOrderedLiteral reads a dotenv-style file into ORDERED, LITERAL entries for
+// the --overview lens. compose-go's dotenv parser cannot be reused here: it returns
+// an unordered map AND expands ${...} (verified v2.11.0, plan §0). This is a thin
+// stdlib-only line reader (keeps the engine seam — no extra compose-go surface). It
+// mirrors dotenv's KEY tokenization (skip blank/#-comment lines; strip a leading
+// `export `; split on the first `=`; key charset [A-Za-z0-9_.-]) but takes the
+// VALUE verbatim — NO ${...} expansion and NO escape processing — except it strips
+// one matching surrounding quote pair, and for an UNQUOTED value trims a trailing
+// " # comment" + trailing space (mirrors dotenv parser.go:157-159; decision D-B).
+func parseOrderedLiteral(path string) ([]provenance.OverviewEntry, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var entries []provenance.OverviewEntry
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// strip a leading `export` + following whitespace (mirror dotenv ^export\s+:
+		// tabs too, N-1) — only when a space/tab actually follows, never "exportFOO".
+		if rest, ok := strings.CutPrefix(line, "export"); ok && rest != "" && (rest[0] == ' ' || rest[0] == '\t') {
+			line = strings.TrimLeft(rest, " \t")
+		}
+		i := strings.IndexByte(line, '=')
+		if i <= 0 {
+			continue // no key, or "=value" — skip (parity with a missing key name)
+		}
+		key := strings.TrimSpace(line[:i])
+		if key == "" || !validEnvKey(key) {
+			continue
+		}
+		raw := line[i+1:]                   // value as-read, leading space intact (dotenv-parity for the # cut)
+		val := strings.TrimLeft(raw, " \t") // for quote detection
+		if len(val) >= 2 && (val[0] == '"' || val[0] == '\'') && val[len(val)-1] == val[0] {
+			val = val[1 : len(val)-1] // quoted: strip ONE matching pair, keep contents verbatim
+		} else {
+			// unquoted: cut an inline " # comment" on the RAW slice (so a value that
+			// is ONLY a trailing comment, e.g. `KEY= # x`, becomes "" — SF-3), then
+			// trim surrounding whitespace.
+			if j := strings.Index(raw, " #"); j >= 0 {
+				raw = raw[:j]
+			}
+			val = strings.TrimSpace(raw)
+		}
+		entries = append(entries, provenance.OverviewEntry{Key: key, RawValue: val})
+	}
+	return entries, sc.Err()
+}
+
+// validEnvKey reports whether key matches dotenv's variable-name charset
+// [A-Za-z0-9_.-] (mirrors parser.go:122-127). Rejects whitespace/`$`/etc., so a
+// malformed line is skipped rather than rendered as a bogus entry.
+func validEnvKey(key string) bool {
+	for _, r := range key {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '_', r == '.', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func envSliceToMap(env []string) map[string]string {
@@ -130,6 +202,11 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 		m := parsed[i]
 		if m == nil {
 			continue // skip missing (parity)
+		}
+		if in.WantLayers { // --overview: raw ordered chain layer (separate read; parsed[i] is expanded/unordered)
+			if entries, lerr := parseOrderedLiteral(f.Path); lerr == nil {
+				rep.Layers = append(rep.Layers, provenance.OverviewLayer{File: f.Path, Layer: "layer1", Entries: entries})
+			}
 		}
 		src := provenance.Source{File: f.Path, Layer: f.Layer}
 		for k, v := range m {
@@ -238,6 +315,11 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 			if !seenFile[ef.Path] {
 				seenFile[ef.Path] = true
 				declaredFiles = append(declaredFiles, ef.Path)
+				if in.WantLayers { // --overview: one raw ordered layer per distinct declared env_file
+					if entries, lerr := parseOrderedLiteral(ef.Path); lerr == nil {
+						rep.Layers = append(rep.Layers, provenance.OverviewLayer{File: ef.Path, Layer: "env_file", Service: name, Entries: entries})
+					}
+				}
 			}
 			m, perr := parseDotEnv(ef.Path, lookup)
 			if perr != nil {
@@ -256,6 +338,26 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 			}
 			final[k] = val
 			source[k] = provenance.Source{File: "(inline environment:)", Layer: "environment"}
+		}
+		// --overview: inline `environment:` pseudo-layer LAST per service (inline
+		// overrides env_file: — the true container precedence). Raw *string values
+		// (NOT interpolated — the C-load uses WithoutEnvironmentResolution), key-sorted
+		// for determinism. Emitted only when the service declares any environment:.
+		if in.WantLayers && len(svc.Environment) > 0 {
+			inlineKeys := make([]string, 0, len(svc.Environment))
+			for k := range svc.Environment {
+				inlineKeys = append(inlineKeys, k)
+			}
+			sort.Strings(inlineKeys)
+			inline := provenance.OverviewLayer{File: "(inline environment:)", Layer: "environment", Service: name}
+			for _, k := range inlineKeys {
+				val := ""
+				if vp := svc.Environment[k]; vp != nil {
+					val = *vp
+				}
+				inline.Entries = append(inline.Entries, provenance.OverviewEntry{Key: k, RawValue: val})
+			}
+			rep.Layers = append(rep.Layers, inline)
 		}
 		se := provenance.ServiceEnv{Service: name, EnvFiles: declaredFiles}
 		for _, k := range sortedKeys(final) {

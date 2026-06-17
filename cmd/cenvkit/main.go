@@ -246,8 +246,8 @@ func newInitCmd() *cobra.Command {
 
 func newEnvDebugCmd() *cobra.Command {
 	var (
-		mChain, mEffective, mFiles, mTrace, mValue, jsonOut bool
-		varName, service                                    string
+		mChain, mEffective, mFiles, mTrace, mValue, mOverview, jsonOut bool
+		varName, service                                               string
 	)
 	c := &cobra.Command{
 		Use:   "env-debug",
@@ -275,6 +275,7 @@ func newEnvDebugCmd() *cobra.Command {
 			profiles := splitProfiles(envValue(cr.Vars, "COMPOSE_PROFILES"))
 			rep, err := engine.New().Provenance(cmd.Context(), engine.ProvInput{
 				ProjectDir: dir, Env: cr.Vars, Profiles: profiles, EnvFiles: pf,
+				WantLayers: mOverview, // only the --overview path builds the raw layer dump (D-A)
 			})
 			if err != nil {
 				return err
@@ -286,6 +287,10 @@ func newEnvDebugCmd() *cobra.Command {
 			provenance.RenderHuman(out, rep, provenance.HumanOpts{
 				Trace: pick(mTrace, varName), Value: pick(mValue, varName),
 				Effective: mEffective, Service: service, Chain: mChain, Files: mFiles,
+				Overview:         mOverview,
+				ComposeEnv:       cr.ComposeEnv,
+				ComposeEnvSource: cr.ComposeEnvSource,
+				ProjectDir:       dir,
 			})
 			return nil
 		},
@@ -295,6 +300,7 @@ func newEnvDebugCmd() *cobra.Command {
 	c.Flags().BoolVar(&mFiles, "files", false, "interpolation set (COMPOSE_ENV_FILES) + runtime-only service env_file paths")
 	c.Flags().BoolVar(&mTrace, "trace", false, "trace --var: winner, overridden, effects")
 	c.Flags().BoolVar(&mValue, "value", false, "winning value of --var")
+	c.Flags().BoolVar(&mOverview, "overview", false, "per-file layering overview (raw values, +/~/· markers)")
 	c.Flags().StringVar(&varName, "var", "", "variable for --trace/--value")
 	c.Flags().StringVar(&service, "service", "", "filter --effective to one service")
 	c.Flags().BoolVar(&jsonOut, "json", false, "machine-readable JSON")

@@ -322,6 +322,7 @@ Docker daemon)**. Add `--json` to any mode for the structured `Report`.
 |---|---|
 | `--chain` (default) | the Layer-1 chain files, in load order (secrets last) |
 | `--files` | two groups: **interpolation** (`COMPOSE_ENV_FILES`, Layer 1) + **runtime-only** (service `env_file:` paths, by service) |
+| `--overview` | the whole env **layering** at a glance: per-file accumulation walk (`+`/`~`/`·` markers, raw values) + per-service `env_file:` layers + `inline environment:`, with `⚠ gap` lines |
 | `--trace --var V` | if `V` is in the chain: its winner, shadowed files, and effects. If `V` is env_file-only: the **gap** (falls back at the run) + the runtime def + a fix |
 | `--effective [--service S]` | each service's **final container env**, with the source of every value (`env_file:` vs inline `environment:`) |
 | `--value --var V` | `V`'s interpolation value, one line (empty if env_file-only) |
@@ -350,6 +351,49 @@ That tells you: `WEB_PORT` is **not** in the interpolation chain, so every
 `${WEB_PORT}` in the YAML falls back at the run; it *is* defined in `web/.web.env`
 (value 18080) but that only reaches the `web` container; and the fix is to promote
 it to Layer 1 (or accept that it's runtime-only).
+
+### `--overview` — the whole layering at a glance
+
+When you want the full picture — every file's contribution and what it shadows —
+`--overview` walks each file with `+` new / `~` override (`old → new`) / `·` repeat
+markers, showing **raw** values (`${...}` left unexpanded). The interpolation chain
+(Layer 1) and the runtime-only service `env_file:` layers are separate sections;
+`inline environment:` is the last layer per service (it wins), and a `⚠ gap:` line
+flags any `${VAR}` that the run will fall back on. (This restores the sh kit's
+`env-debug-diff` overview, correct under v3.)
+
+```sh
+$ cenvkit env-debug --overview
+env overview — myproject (mode: overview)
+  COMPOSE_ENV = dev (from .env)
+  Project dir = /app
+
+Interpolation chain (COMPOSE_ENV_FILES)
+  + new   ~ override   · repeat
+
+  /app/.env
+      + COMPOSE_PROJECT_NAME = monorepo
+      + SITE_URL = example.com
+  /app/.dev.env
+      + IS_DEV = true
+
+Runtime-only — service env_file: (NOT interpolated)
+  web:
+    /app/web/.web.env
+        + WEB_PORT = 18080
+    /app/web/.web.dev.env
+        + WEB_DEBUG = true
+    inline environment:
+        ~ WEB_PORT = 18080 → 0
+    ⚠ gap: WEB_PORT — used as ${WEB_PORT} in service web (environment[0], ports[0])
+      but NOT in the Layer-1 chain → run falls back.
+```
+
+Read it as: the chain (what feeds interpolation) sets `SITE_URL`/`IS_DEV`; `web`'s
+container gets `WEB_PORT=18080` from its `env_file:` but the inline `environment:`
+overrides it to the `${WEB_PORT:-0}` fallback (`0`) — and because `WEB_PORT` is
+not in the chain, every `${WEB_PORT}` in the YAML falls back at the run (the gap).
+Add `--json` for the structured `layers` array.
 
 ### `--effective` — a service's final container env, with sources
 

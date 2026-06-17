@@ -1,5 +1,6 @@
-// Package acceptance ports the smoke-monorepo.sh (23 scenarios, 75 assertions after
-// v3 provenance recount) and smoke.sh suites to drive the cenvkit binary directly.
+// Package acceptance ports the smoke-monorepo.sh (23 scenarios, 78 assertions after
+// v3 provenance recount + --overview additions) and smoke.sh suites to drive the
+// cenvkit binary directly.
 //
 // Invocation map (replaces all ./docker / run_shim calls):
 //
@@ -22,9 +23,10 @@
 //	V3: env-debug --trace on a service-env_file-only var reports Gap=true, runtime defs,
 //	    and the fallback resolved value — not a layer2 winner.
 //
-// Count: exactly 75 smoke-monorepo assertions (v2 baseline 68, −1 retire 6.1,
-// +5 new v3 gap/L1-only assertions, +3 prov-6 --effective inline-env invariants).
-// C1 (§4a single-pass) and D1-runtime (§4b fatal) use throwaway fixtures, NOT counted in 75.
+// Count: exactly 78 smoke-monorepo assertions (v2 baseline 68, −1 retire 6.1,
+// +5 new v3 gap/L1-only assertions, +3 prov-6 --effective inline-env invariants,
+// +3 --overview mode assertions).
+// C1 (§4a single-pass) and D1-runtime (§4b fatal) use throwaway fixtures, NOT counted in 78.
 package acceptance
 
 import (
@@ -583,7 +585,7 @@ func TestScenario_G5_InstallLayout(t *testing.T) {
 	}
 }
 
-// ─── C1: single-pass §4a contract (throwaway fixture, NOT counted in 75) ─────
+// ─── C1: single-pass §4a contract (throwaway fixture, NOT counted in 78) ─────
 
 // C1: an env_file: path referencing a var defined ONLY in another service's
 // env_file does NOT silently resolve (single-pass, Layer-1-only interpolation).
@@ -628,7 +630,7 @@ services:
 	}
 }
 
-// ─── D1 runtime-fatal half (docker-gated, throwaway fixture, NOT counted in 75) ──
+// ─── D1 runtime-fatal half (docker-gated, throwaway fixture, NOT counted in 78) ──
 
 // D1 runtime: missing *required* env_file is lenient at assembly but fatal at
 // the real docker compose run (cenvkit compose must NOT carry the lever into the exec).
@@ -816,7 +818,7 @@ services:
 	}
 }
 
-// ─── env-debug provenance assertions (8 net-new; count 60→68→75) ────────────
+// ─── env-debug provenance assertions (8 net-new; count 60→68→75→78) ─────────
 
 // provenanceReport is the minimal shape we need to parse --json output for
 // provenance assertions. Fields not needed by these tests are omitted.
@@ -955,7 +957,7 @@ func TestProvenance_Effective_Web_JSON(t *testing.T) {
 //  3. An inline environment: value for the SAME key beats the env_file: value
 //     (environment > env_file precedence in Docker Compose native semantics).
 //
-// (3 assertions; count: 72 + 3 = 75)
+// (3 assertions; count: 72 + 3 = 75; +3 --overview → 78)
 func TestProvenance_Effective_InlineEnvInterpolation(t *testing.T) {
 	dir := t.TempDir()
 	// svc.env defines X (env_file-only) and OVERRIDE_ME (beaten by inline env).
@@ -1089,7 +1091,7 @@ func TestProvenance_ChainOnly_JSON(t *testing.T) {
 	}
 }
 
-// ─── v3 new assertions (5 net-new + 3 prov-6; 68−1+5+3 = 75) ────────────────
+// ─── v3 new assertions (5 net-new + 3 prov-6; 68−1+5+3 = 75; +3 --overview → 78) ──
 
 // [V1 run-path L1-only] env-files output contains NO service env_file: path. (+1, RED on pre-v3)
 func TestV3_RunPath_EnvFiles_L1Only(t *testing.T) {
@@ -1190,6 +1192,91 @@ services:
 		t.Fatalf("[v3-nogap-1] CHAIN_VAR winner.layer = %q, want layer1", cv.Winner.Layer)
 	}
 }
+
+// ─── env-debug --overview acceptance assertions (+3 → count 78) ──────────────
+
+// [overview-1] chain section: two-file chain with a + (new) and ~ (override) marker.
+// Uses a scratch fixture (not examples/monorepo) so we control the exact keys.
+// Daemon-free: no compose file needed for the chain-only overview path.
+func TestOverview_ChainMarkers(t *testing.T) {
+	dir := t.TempDir()
+	// .docker-env-chain with two files
+	os.WriteFile(filepath.Join(dir, ".docker-env-chain"), []byte(".env\n.dev.env\n"), 0o644)
+	// .env: defines SITE_URL (will be overridden) and BASE_KEY (new, not overridden)
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\nBASE_KEY=base\n"), 0o644)
+	// .dev.env: overrides SITE_URL (~) and adds IS_DEV (+)
+	os.WriteFile(filepath.Join(dir, ".dev.env"), []byte("SITE_URL=dev.example.com\nIS_DEV=true\n"), 0o644)
+
+	out, err := runCenvkit(t, dir, nil, "env-debug", "--overview")
+	if err != nil {
+		t.Fatalf("[overview-1] env-debug --overview: %v\n%s", err, out)
+	}
+	// overview-1a: chain section header must be present
+	if !strings.Contains(out, "Interpolation chain") {
+		t.Fatalf("[overview-1a] expected 'Interpolation chain' section header:\n%s", out)
+	}
+	// overview-1b: .dev.env must appear in the chain section
+	if !strings.Contains(out, ".dev.env") {
+		t.Fatalf("[overview-1b] expected .dev.env in chain section:\n%s", out)
+	}
+	// overview-1c: SITE_URL must show an override (~) marker — defined in .env,
+	// then overridden in .dev.env. This is the key chain-marker assertion.
+	if !strings.Contains(out, "~ SITE_URL") {
+		t.Fatalf("[overview-1c] expected '~ SITE_URL' (override marker) in chain section:\n%s", out)
+	}
+	// overview-1d: IS_DEV first defined in .dev.env → + marker
+	if !strings.Contains(out, "+ IS_DEV") {
+		t.Fatalf("[overview-1d] expected '+ IS_DEV' (new key marker) in chain section:\n%s", out)
+	}
+}
+
+// [overview-2] runtime section: web service shows its .web.env layer.
+// Daemon-free. web/.web.env is git-tracked and already staged by stageMonorepo's
+// cp -R — no seeding needed (SF-2: root dotfiles are gitignored/seeded via init,
+// SERVICE dotfiles like web/.web.env are git-tracked and present after cp -R).
+func TestOverview_RuntimeWebLayer(t *testing.T) {
+	root := stageMonorepo(t)
+	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--overview")
+	if err != nil {
+		t.Fatalf("[overview-2] env-debug --overview: %v\n%s", err, out)
+	}
+	// overview-2a: runtime-only section header must be present
+	if !strings.Contains(out, "Runtime-only") {
+		t.Fatalf("[overview-2a] expected 'Runtime-only' section header:\n%s", out)
+	}
+	// overview-2b: the web: service heading line must appear (N-3: "web" alone is
+	// too weak — it matches the path, the title, etc.; assert the heading form).
+	if !strings.Contains(out, "web:") {
+		t.Fatalf("[overview-2b] expected 'web:' service heading in runtime section:\n%s", out)
+	}
+	// overview-2c: web service's .web.env layer must appear
+	if !strings.Contains(out, ".web.env") {
+		t.Fatalf("[overview-2c] expected .web.env layer in web service block:\n%s", out)
+	}
+}
+
+// [overview-3] WEB_PORT gap annotation: the gap line must appear for WEB_PORT
+// (defined only in web/.web.env, not in the Layer-1 chain). Daemon-free.
+// web/.web.env is git-tracked and already staged by stageMonorepo's cp -R
+// (SF-2: no seeding needed — service dotfiles are tracked, unlike root dotfiles).
+func TestOverview_WEBPORTGap(t *testing.T) {
+	root := stageMonorepo(t)
+	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--overview")
+	if err != nil {
+		t.Fatalf("[overview-3] env-debug --overview: %v\n%s", err, out)
+	}
+	// overview-3: gap annotation for WEB_PORT must appear
+	// WEB_PORT is in web/.web.env (runtime-only) and is referenced as ${WEB_PORT:-0}
+	// in web/docker-compose.yml → the gap detector flags it → --overview renders ⚠ gap.
+	if !strings.Contains(out, "gap") {
+		t.Fatalf("[overview-3] expected gap annotation for WEB_PORT in --overview output:\n%s", out)
+	}
+	if !strings.Contains(out, "WEB_PORT") {
+		t.Fatalf("[overview-3] expected WEB_PORT in gap annotation:\n%s", out)
+	}
+}
+
+// ─── end --overview acceptance assertions ─────────────────────────────────────
 
 // [no-false-gap: unset everywhere] A var unset in both L1 chain and all service
 // env_file:s is NOT flagged as a gap. (+1, RED on an over-eager gap impl)

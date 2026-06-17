@@ -21,10 +21,11 @@ type Input struct {
 
 // Result is the resolved Layer-1 view.
 type Result struct {
-	Files      []string // ordered absolute Layer-1 paths, existing only, deduped
-	Vars       []string // merged "K=V" seed for the engine (OS env wins over file vars), sorted
-	ComposeEnv string   // resolved COMPOSE_ENV ("dev" default)
-	Host       string   // resolved + sanitized host ([A-Za-z0-9._-])
+	Files            []string // ordered absolute Layer-1 paths, existing only, deduped
+	Vars             []string // merged "K=V" seed for the engine (OS env wins over file vars), sorted
+	ComposeEnv       string   // resolved COMPOSE_ENV ("dev" default)
+	ComposeEnvSource string   // where ComposeEnv came from: "shell" | ".env" | "default" (for the --overview header)
+	Host             string   // resolved + sanitized host ([A-Za-z0-9._-])
 }
 
 // defaultChain is used when no .docker-env-chain file is present (spec §4 step 2).
@@ -86,17 +87,19 @@ func parseDotEnv(path string) (map[string]string, error) {
 	return out, sc.Err()
 }
 
-func resolveComposeEnv(in Input, osEnv map[string]string) string {
+// resolveComposeEnv returns the resolved COMPOSE_ENV and the source it came from
+// ("shell" | ".env" | "default") for the --overview header (decision §8a).
+func resolveComposeEnv(in Input, osEnv map[string]string) (value, source string) {
 	if v := osEnv["COMPOSE_ENV"]; v != "" {
-		return sanitizeToken(v)
+		return sanitizeToken(v), "shell"
 	}
 	// fall back to a COMPOSE_ENV= line in the root .env
 	if m, err := parseDotEnv(filepath.Join(in.ProjectDir, ".env")); err == nil {
 		if v := m["COMPOSE_ENV"]; v != "" {
-			return sanitizeToken(v)
+			return sanitizeToken(v), ".env"
 		}
 	}
-	return "dev"
+	return "dev", "default"
 }
 
 func resolveHost(in Input, osEnv map[string]string) string {
@@ -151,7 +154,7 @@ func readChainTemplates(projectDir string) ([]string, error) {
 // Resolve computes the Layer-1 file list and the seed environment.
 func Resolve(in Input) (Result, error) {
 	osEnv := osEnvMap(in.OSEnv)
-	composeEnv := resolveComposeEnv(in, osEnv)
+	composeEnv, composeEnvSource := resolveComposeEnv(in, osEnv)
 	host := resolveHost(in, osEnv)
 
 	tmpls, err := readChainTemplates(in.ProjectDir)
@@ -207,5 +210,5 @@ func Resolve(in Input) (Result, error) {
 		vars = append(vars, k+"="+merged[k])
 	}
 
-	return Result{Files: files, Vars: vars, ComposeEnv: composeEnv, Host: host}, nil
+	return Result{Files: files, Vars: vars, ComposeEnv: composeEnv, ComposeEnvSource: composeEnvSource, Host: host}, nil
 }
