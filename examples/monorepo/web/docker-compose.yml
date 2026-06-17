@@ -7,9 +7,10 @@
 #                `include:`.
 #
 # WEB_PORT is declared ONLY in this subproject's service env_file: (.web.env).
-# The `${WEB_PORT:-0}` published port resolves to the real value (18080) because
-# the kit folds .web.env into COMPOSE_ENV_FILES (Layer-2) — whether you run from
-# here OR from the root (cross-subproject Layer-2 via the include).
+# That file is runtime-only (container env) — NOT folded into COMPOSE_ENV_FILES.
+# So ${WEB_PORT:-0} falls back to 0 at compose-time interpolation.
+# `cenvkit env-debug --trace --var WEB_PORT` surfaces the gap; add WEB_PORT to
+# the Layer-1 chain (.env) to make it feed ${VAR} interpolation.
 # ============================================
 
 services:
@@ -20,8 +21,8 @@ services:
       - path: ./.web.env
         required: false
       # Per-environment tier, selected by ${COMPOSE_ENV} (dev/prod). Loaded after
-      # .web.env (last-wins). required: false → a missing tier is just skipped,
-      # and the kit's Layer-2 discovery resolves the ${COMPOSE_ENV} token too.
+      # .web.env (last-wins). required: false → a missing tier is just skipped.
+      # ${COMPOSE_ENV} resolves from the Layer-1 chain (COMPOSE_ENV is there).
       - path: ./.web.${COMPOSE_ENV:-dev}.env
         required: false
     ports:

@@ -2,10 +2,11 @@
 
 A complete, runnable example of the **root-`include:`-s-subprojects** topology:
 a root compose that pulls in two subprojects (`web/`, `api/`) via `include:`,
-plus a shared network. It demonstrates the one thing native compose can't do
-across an `include:` boundary — **cross-subproject Layer-2**: a `${WEB_PORT}`
-declared only in `web/.web.env` (and `${API_PORT}` in `api/.api.env`) resolving
-correctly even when you render the whole stack *from the root*.
+plus a shared network. It demonstrates the gap that native compose leaves open
+and how `cenvkit env-debug` surfaces it: `${WEB_PORT}` lives only in
+`web/.web.env` (a service `env_file:`) — that file is **runtime-only**, so the
+YAML interpolation falls back to `:-0`. `env-debug` tells you exactly what is
+happening and what to fix.
 
 The blueprint is driven entirely by **`cenvkit`** (the Go CLI) — there are no
 Makefiles and no vendored wrapper scripts.
@@ -21,14 +22,14 @@ examples/monorepo/
 ├── example.prod.env           # root prod tier (→ .prod.env); IS_DEV=false
 ├── web/
 │   ├── docker-compose.yml     # service `web`, env_file: [./.web.env, ./.web.${COMPOSE_ENV}.env]
-│   ├── .web.env               # WEB_PORT=18080  (defined ONLY here, env-agnostic)
+│   ├── .web.env               # WEB_PORT=18080  (defined ONLY here, runtime-only)
 │   └── .web.dev.env / .web.prod.env   # per-service tier (WEB_DEBUG), by ${COMPOSE_ENV}
 ├── api/
 │   ├── docker-compose.yml     # service `api`, env_file: [./.api.env], "${API_PORT:-0}:80"
-│   └── .api.env               # API_PORT=19090  (defined ONLY here)
+│   └── .api.env               # API_PORT=19090  (defined ONLY here, runtime-only)
 └── services/reports/          # nested deeper (legacy services/<svc>/ shape)
     ├── docker-compose.yml     # service `reports`, env_file: [./.reports.env]
-    └── .reports.env           # REPORTS_PORT=15151  (reached via the include graph from root)
+    └── .reports.env           # REPORTS_PORT=15151  (defined ONLY here, runtime-only)
 ```
 
 > This is a **source blueprint**. Real `.env` files are seeded from the
@@ -37,65 +38,121 @@ examples/monorepo/
 
 ---
 
-## Run it BOTH ways
+## The two layers (Layer 1 vs service env_file:)
 
-### A. Unified, from the root (one stack, cross-subproject Layer-2)
+| Layer | Populates | Feeds `${VAR}` interpolation? |
+|---|---|---|
+| Layer-1 chain (`COMPOSE_ENV_FILES`, `.docker-env-chain`) | root `.env`, `.dev.env`, `.secrets.env`, … | **yes** |
+| Service `env_file:` (`web/.web.env`, `api/.api.env`, …) | each container's runtime env | **no** |
+
+`WEB_PORT=18080` lives only in `web/.web.env` — a service `env_file:`. At
+compose-time interpolation, `${WEB_PORT}` is not in the Layer-1 chain, so it
+falls back to `:-0`. The container still receives `WEB_PORT=18080` at runtime
+(via the service `env_file:`). `cenvkit env-debug` surfaces exactly this.
+
+---
+
+## Run it
+
+### A. Unified, from the root
 
 ```sh
 cd examples/monorepo
 
-# 1. Seed the real env files from the example.* templates (no-clobber). cenvkit
-#    init also fans out one directory level to seed each immediate subproject.
+# 1. Seed the real env files from the example.* templates (no-clobber).
 cenvkit init                 # → .env, .dev.env, .prod.env (never clobbers)
 
-# 2. Render the unified config. cenvkit loads the real, include-aware compose
-#    model, enumerates BOTH subprojects' env_file: paths (Layer-2) and folds
-#    them in, so the subproject ports resolve from the root.
-cenvkit compose config | grep -E 'WEB_PORT|API_PORT|published'
-#   WEB_PORT: "18080"
-#   API_PORT: "19090"
-#     published: "18080"
-#     published: "19090"
-
-# Prove the env-files chain lists both subproject env files:
+# 2. See the Layer-1 chain (these are the files that feed interpolation).
 cenvkit env-files
 #   …/examples/monorepo/.env
-#   …/examples/monorepo/web/.web.env      ← enumerated across the include
-#   …/examples/monorepo/api/.api.env      ← enumerated across the include
+#   …/examples/monorepo/.dev.env
 
-# Inspect the chain, in load order, and validate:
-cenvkit env-debug --chain
-cenvkit validate             # docker compose config -q
+# 3. See BOTH groups — interpolation chain AND runtime-only service env_files:
+cenvkit env-debug --files
+#   interpolation (COMPOSE_ENV_FILES):
+#     …/examples/monorepo/.env
+#     …/examples/monorepo/.dev.env
+#   runtime-only (service env_file: — NOT interpolated, container env only):
+#     api:
+#       …/examples/monorepo/api/.api.env
+#     reports:
+#       …/examples/monorepo/services/reports/.reports.env
+#     web:
+#       …/examples/monorepo/web/.web.env
+#       …/examples/monorepo/web/.web.dev.env
+
+# 4. Render the unified config. ${WEB_PORT} falls back to 0 (Layer-1 only).
+cenvkit compose config | grep -E 'WEB_PORT|API_PORT|published'
+#   WEB_PORT: "0"          ← :-0 fallback; WEB_PORT is not in the Layer-1 chain
+#   API_PORT: "0"          ← same
+#     published: "0"
+
+# 5. Validate (docker compose config -q):
+cenvkit validate
 ```
 
-Compare to **native** compose from the root — the gap `cenvkit` closes:
+Native compose from the root behaves identically on the fallback — the gap is
+Docker's native behavior, not something cenvkit adds:
 
 ```sh
 docker compose config | grep -E 'WEB_PORT|API_PORT|published'
-#   WEB_PORT: "0"        ← :-0 fallback; native compose never read web/.web.env
-#   API_PORT: "0"        ← …nor api/.api.env, because they sit behind the include
+#   WEB_PORT: "0"        ← same :-0 fallback
+#   API_PORT: "0"
 ```
 
 ### B. Isolated, per subproject (each runs on its own)
 
-A subproject runs independently of the root stack — point `cenvkit` at the
-subproject's directory (or `cd` into it). Everything resolves relative to that
-project directory:
+A subproject runs independently — point `cenvkit` at its directory. Everything
+resolves relative to that project directory:
 
 ```sh
 # From the subproject directory:
 cd examples/monorepo/web
-cenvkit compose config | grep -E 'WEB_PORT|published'
-#   WEB_PORT: "18080"      ← resolves its OWN .web.env, independent of the root
+cenvkit env-files
+#   …/web/.env    (if it exists after init in the subproject)
 
 # …or without changing directory, with --project-dir:
-cenvkit --project-dir examples/monorepo/web compose config
 cenvkit --project-dir examples/monorepo/web env-files
 ```
 
 Running from the root (A) and running isolated (B) are fully independent: each
 invocation resolves *its own* chain and `env_file:` paths against its project
 directory.
+
+---
+
+## The gap-detector: env-debug
+
+`cenvkit env-debug` is daemon-free — no Docker needed.
+
+```sh
+# Trace WEB_PORT: see the gap (runtime-only, falls back at interpolation time).
+cenvkit env-debug --trace --var WEB_PORT
+# WEB_PORT
+#   interpolation: NOT in the Layer-1 chain -> ${WEB_PORT} falls back at run time
+#   runtime:       …/web/.web.env -> WEB_PORT=18080  (service `web` container env only)
+#   ⚠ gap: ${WEB_PORT} used in service web environment[0] resolves to "WEB_PORT=0" at the run, NOT the env_file value (defined only in a service env_file).
+#   ⚠ gap: ${WEB_PORT} used in service web ports[0] resolves to "0:80" at the run, NOT the env_file value (defined only in a service env_file).
+#   fix:   add WEB_PORT to the Layer-1 chain (e.g. .env), or use it runtime-only.
+
+# Show the final container env for the web service (with sources):
+cenvkit env-debug --effective --service web
+# service web:
+#   IS_DEV=true	<- (inline environment:) (environment)
+#   STACK_TIER=dev	<- (inline environment:) (environment)
+#   WEB_DEBUG=true	<- …/web/.web.dev.env (env_file)
+#   WEB_PORT=0	<- (inline environment:) (environment)
+```
+
+The `--effective` output shows the **truth about the container**: `WEB_PORT=0`
+comes from the inline `environment: WEB_PORT: "${WEB_PORT:-0}"` — interpolated
+against the Layer-1 chain, which does not have `WEB_PORT`, so the `:-0` fallback
+wins. That overrides the `18080` in `web/.web.env` (inline `environment:` always
+wins over `env_file:`).
+
+**To make `${WEB_PORT}` interpolate** (e.g. to publish the real port): add
+`WEB_PORT=18080` to the Layer-1 chain (root `.env` or `web/.env`). Then both
+`env-files` and `env-debug --trace` will show it as a chain variable with no gap.
 
 ---
 
@@ -108,10 +165,6 @@ cenvkit init                 # seeds .dev.env / .prod.env from the templates
 
 COMPOSE_ENV=prod cenvkit compose config | grep STACK_TIER
 #   STACK_TIER: prod      ← docker-compose.prod.yml overlay (COMPOSE_FILE selector)
-
-COMPOSE_ENV=prod cenvkit env-files | grep -E '\.web\.|\.prod\.env'
-#   …/web/.web.prod.env   ← per-service tier switched with the env
-#   …/.prod.env           ← root tier (IS_DEV=false)
 ```
 
 Per-machine tweaks (log level, local paths) go in an optional `.${HOSTNAME}.env`
@@ -131,9 +184,9 @@ COMPOSE_PROFILES=tools cenvkit compose config --services # web, api, tools
 ## Verify
 
 `test/smoke-monorepo.sh` runs this whole blueprint end-to-end against the
-`cenvkit` binary (root resolves both subproject ports via cross-subproject
-Layer-2, an isolated subproject resolves its own port, and a native baseline
-shows the `:-0` fallback to prove the win):
+`cenvkit` binary — confirming that `env-files` returns Layer-1 only, that
+`${WEB_PORT}` falls back to `0` (runtime-only gap), and that `env-debug --trace`
+reports the gap correctly:
 
 ```sh
 sh test/smoke-monorepo.sh

@@ -6,9 +6,9 @@
 # .env COMPOSE_ENV > "dev". Missing files are silently skipped. Last wins.
 #
 # Subproject service env_file: paths (web/.web.env, api/.api.env) are NOT listed
-# here — they are AUTO-DISCOVERED (Layer 2) from the included subproject compose
-# files to COMPOSE_DEPTH levels (default 3). That cross-subproject discovery is
-# what lets a ${WEB_PORT} declared only in web/.web.env resolve from the root.
+# here — they are runtime-only (per-service, native Docker container env). They
+# do NOT feed ${VAR} interpolation. `cenvkit env-debug --files` shows both groups:
+# Layer-1 interpolation files and runtime-only service env_file: paths by service.
 # ============================================
 
 # Layer 1: root base + env-specific overlay
@@ -23,7 +23,7 @@
 # interchangeable; both resolve to the machine hostname. Missing file ⇒ skipped.
 .${HOSTNAME}.env
 
-# Layer 2 here = SECRETS only (last wins, gitignored). Per-subproject secrets
-# live in each subproject's own gitignored env file (e.g. web/.web.secrets.env)
-# and are discovered via that subproject's env_file: — keep them out of root.
+# Secrets tier (last wins, gitignored). Last-wins within this Layer-1 chain.
+# Per-subproject secrets belong in each subproject's own gitignored env file
+# (e.g. web/.web.secrets.env) — listed there via service env_file: (runtime-only).
 .secrets.env

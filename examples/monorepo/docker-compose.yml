@@ -10,11 +10,11 @@
 #
 # WHY the kit matters here: the included subproject compose files reference
 # ${WEB_PORT} / ${API_PORT}, but those vars live ONLY in the subprojects' own
-# service env_file: (web/.web.env, api/.api.env). Native `docker compose config`
-# from the root interpolates them BEFORE those env_file:s are read, so you get
-# the `:-0` fallback. The ./docker shim discovers each subproject's env_file:
-# (Layer-2, to COMPOSE_DEPTH levels — default 3, enough to reach web/ and api/)
-# and folds them into COMPOSE_ENV_FILES, so the ports resolve from the root too.
+# service env_file: (web/.web.env, api/.api.env). Those env_file:s are
+# runtime-only — they do NOT feed ${VAR} interpolation. So ${WEB_PORT} and
+# ${API_PORT} fall back to :-0 at the run. Use `cenvkit env-debug --trace --var
+# WEB_PORT` to see the gap; promote a port to the Layer-1 chain (.env) if you
+# need it to interpolate at compose time.
 # ============================================
 
 include:
@@ -38,8 +38,8 @@ services:
     depends_on:
       web: { condition: service_started }
 
-  # A deeper subproject (services/reports/) — proves cross-subproject Layer-2
-  # reaches services/<svc>/ at the default depth. Joins the shared network too.
+  # A deeper subproject (services/reports/) — nested one extra level under
+  # services/. Reached via the include: graph from the root. Joins the shared network.
   reports:
     networks: [shared]
 

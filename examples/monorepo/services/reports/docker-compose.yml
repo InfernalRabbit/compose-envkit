@@ -2,13 +2,14 @@
 # reports subproject — base compose, nested under services/ (one level deeper
 # than web/ + api/). This mirrors the legacy monorepo's services/<svc>/ layout.
 #
-# Cross-subproject Layer-2 still reaches it from the root: this file sits at
-# find-depth 3 (services=1, reports=2, file=3) — exactly the default
-# COMPOSE_DEPTH. A subproject nested deeper needs COMPOSE_DEPTH bumped (see
-# docs/monorepo.md → "the depth knob").
+# Reached from the root via the `include:` graph in the root docker-compose.yml.
+# COMPOSE_DEPTH is accepted-but-ignored; the include graph, not depth-bounded
+# glob discovery, is what makes cenvkit aware of this subproject.
 #
-# REPORTS_PORT lives ONLY in this subproject's env_file (.reports.env); the kit
-# folds it in so ${REPORTS_PORT} resolves from the root too.
+# REPORTS_PORT lives ONLY in this subproject's env_file (.reports.env) —
+# runtime-only (container env). ${REPORTS_PORT} falls back to :-0 at
+# compose-time interpolation. `cenvkit env-debug --trace --var REPORTS_PORT`
+# shows the gap. Add REPORTS_PORT to the Layer-1 chain to feed interpolation.
 # ============================================
 
 services:
