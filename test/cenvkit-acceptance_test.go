@@ -1,6 +1,5 @@
-// Package acceptance ports the smoke-monorepo.sh (23 scenarios, 79 assertions after
-// v3 provenance recount + --overview additions + blueprint chain-override) and
-// smoke.sh suites to drive the cenvkit binary directly.
+// Package acceptance ports the smoke-monorepo.sh and smoke.sh suites to drive the
+// cenvkit binary directly. Current assertion count: 108.
 //
 // Invocation map (replaces all ./docker / run_shim calls):
 //
@@ -23,10 +22,21 @@
 //	V3: env-debug --trace on a service-env_file-only var reports Gap=true, runtime defs,
 //	    and the fallback resolved value — not a layer2 winner.
 //
-// Count: exactly 78 smoke-monorepo assertions (v2 baseline 68, −1 retire 6.1,
-// +5 new v3 gap/L1-only assertions, +3 prov-6 --effective inline-env invariants,
-// +3 --overview mode assertions).
-// C1 (§4a single-pass) and D1-runtime (§4b fatal) use throwaway fixtures, NOT counted in 78.
+// Assertion lineage:
+//
+//	68  smoke-monorepo v2 baseline
+//	−1  retire scenario 6.1
+//	+5  v3 gap/L1-only assertions
+//	+3  prov-6 --effective inline-env invariants
+//	+3  --overview mode assertions (#5)
+//	+1  blueprint chain-override SITE_URL (#10)
+//	+28 gap-report batch A/A2/B/B2/C2/D1–D4/E (#11)
+//	+1  corrected C1: --value on env_file-only var is empty (#11 follow-up)
+//	────
+//	108 total
+//
+// Note: TestC1_SinglePassLayerContract and TestD1_RuntimeFatalMissingRequired use
+// throwaway fixtures and guard contract seams — they are included in the 108 count.
 package acceptance
 
 import (
@@ -65,6 +75,21 @@ func runCenvkit(t *testing.T, dir string, env []string, args ...string) (string,
 	c.Env = append(os.Environ(), env...)
 	out, err := c.CombinedOutput()
 	return string(out), err
+}
+
+// runCenvkitSplit runs cenvkit and returns stdout, stderr, and error SEPARATELY.
+// Use this for tests that assert on exit code AND stderr content (e.g. error paths,
+// validate-negative) where CombinedOutput() would mix them.
+func runCenvkitSplit(t *testing.T, dir string, env []string, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	c := exec.Command(cenvkitBin, args...)
+	c.Dir = dir
+	c.Env = append(os.Environ(), env...)
+	var outBuf, errBuf strings.Builder
+	c.Stdout = &outBuf
+	c.Stderr = &errBuf
+	err = c.Run()
+	return outBuf.String(), errBuf.String(), err
 }
 
 func dockerAvailable() bool { return os.Getenv("SMOKE_SKIP_DOCKER") != "1" }
@@ -543,6 +568,34 @@ func TestEnvDebug_ValueUnset(t *testing.T) {
 	}
 }
 
+// corrected-C1: --value on an env_file-only var returns EMPTY (v3 spec: --value
+// reports the Layer-1 interpolation winner; a var defined only in a service
+// env_file: has no Layer-1 winner → empty). Contrast: a chain var returns its value.
+// RED on a hypothetical impl that leaks service env_file: values into --value output.
+// Uses the staged monorepo: WEB_PORT is env_file-only (web/.web.env); COMPOSE_ENV is
+// a chain var (.env sets it to "dev"). (2 assertions)
+func TestEnvDebug_Value_EnvFileOnly_Empty(t *testing.T) {
+	root := stageMonorepo(t)
+
+	// corrected-C1a: env_file-only var → empty output (NOT "18080" or "0")
+	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--value", "--var", "WEB_PORT")
+	if err != nil {
+		t.Fatalf("[C1a] --value --var WEB_PORT: %v\n%s", err, out)
+	}
+	if trimmed := strings.TrimSpace(out); trimmed != "" {
+		t.Fatalf("[C1a] --value --var WEB_PORT = %q, want empty (env_file-only var has no Layer-1 winner)", trimmed)
+	}
+
+	// corrected-C1b: chain var → non-empty value (COMPOSE_ENV is set in .env)
+	out2, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--value", "--var", "COMPOSE_ENV")
+	if err != nil {
+		t.Fatalf("[C1b] --value --var COMPOSE_ENV: %v\n%s", err, out2)
+	}
+	if trimmed := strings.TrimSpace(out2); trimmed == "" {
+		t.Fatalf("[C1b] --value --var COMPOSE_ENV must be non-empty (chain var)")
+	}
+}
+
 // --chain exit 0 + non-empty output (smoke.sh 5.1)
 func TestEnvDebug_ChainExitsZero(t *testing.T) {
 	dir := t.TempDir()
@@ -585,7 +638,7 @@ func TestScenario_G5_InstallLayout(t *testing.T) {
 	}
 }
 
-// ─── C1: single-pass §4a contract (throwaway fixture, NOT counted in 78) ─────
+// ─── C1: single-pass §4a contract (throwaway fixture) ───────────────────────
 
 // C1: an env_file: path referencing a var defined ONLY in another service's
 // env_file does NOT silently resolve (single-pass, Layer-1-only interpolation).
@@ -630,7 +683,7 @@ services:
 	}
 }
 
-// ─── D1 runtime-fatal half (docker-gated, throwaway fixture, NOT counted in 78) ──
+// ─── D1 runtime-fatal half (docker-gated, throwaway fixture) ────────────────
 
 // D1 runtime: missing *required* env_file is lenient at assembly but fatal at
 // the real docker compose run (cenvkit compose must NOT carry the lever into the exec).
@@ -818,15 +871,19 @@ services:
 	}
 }
 
-// ─── env-debug provenance assertions (8 net-new; count 60→68→75→78) ─────────
+// ─── env-debug provenance assertions ─────────────────────────────────────────
 
 // provenanceReport is the minimal shape we need to parse --json output for
 // provenance assertions. Fields not needed by these tests are omitted.
 // v3 additions: Gap/InChain/RuntimeDefs on VarTrace; Gap on Effect.
 type provenanceReport struct {
-	Services []struct {
-		Service string `json:"service"`
-		Entries []struct {
+	// top-level file lists (present in --files and --chain JSON output)
+	Files      []string `json:"files"`
+	ChainFiles []string `json:"chain_files"`
+	Services   []struct {
+		Service  string   `json:"service"`
+		EnvFiles []string `json:"env_files"` // runtime-only env_file: paths for this service
+		Entries  []struct {
 			Key    string `json:"key"`
 			Value  string `json:"value"`
 			Source struct {
@@ -956,8 +1013,6 @@ func TestProvenance_Effective_Web_JSON(t *testing.T) {
 //
 //  3. An inline environment: value for the SAME key beats the env_file: value
 //     (environment > env_file precedence in Docker Compose native semantics).
-//
-// (3 assertions; count: 72 + 3 = 75; +3 --overview → 78)
 func TestProvenance_Effective_InlineEnvInterpolation(t *testing.T) {
 	dir := t.TempDir()
 	// svc.env defines X (env_file-only) and OVERRIDE_ME (beaten by inline env).
@@ -1091,7 +1146,7 @@ func TestProvenance_ChainOnly_JSON(t *testing.T) {
 	}
 }
 
-// ─── v3 new assertions (5 net-new + 3 prov-6; 68−1+5+3 = 75; +3 --overview → 78) ──
+// ─── v3 new assertions ───────────────────────────────────────────────────────
 
 // [V1 run-path L1-only] env-files output contains NO service env_file: path. (+1, RED on pre-v3)
 func TestV3_RunPath_EnvFiles_L1Only(t *testing.T) {
@@ -1193,7 +1248,7 @@ services:
 	}
 }
 
-// ─── env-debug --overview acceptance assertions (+3 → count 78) ──────────────
+// ─── env-debug --overview acceptance assertions ───────────────────────────────
 
 // [overview-1] chain section: two-file chain with a + (new) and ~ (override) marker.
 // Uses a scratch fixture (not examples/monorepo) so we control the exact keys.
@@ -1330,15 +1385,330 @@ services:
 	}
 }
 
-// ─── color / ANSI no-leak guards (NOT counted in 78) ────────────────────────
+// ─── gap-report batch (A / A2 / B / B2 / C2 / D1–D4 / E) ────────────────────
 //
-// The 78 acceptance assertions above run non-TTY/CI, so their literal-string
+// C1 (--value WEB_PORT) is omitted: --value returns the Layer-1 winning value,
+// which is empty for WEB_PORT (not in chain); the compose-resolved fallback "0"
+// is only visible via --trace --json. See TestEnvDebug_Value_EnvFileOnly_Empty.
+
+// [A] validate positive (docker-gated): staged monorepo, COMPOSE_ENV=dev →
+// exits 0 + stdout contains "config valid". (2 assertions: exit 0 + message)
+// [A-neg] validate negative: scratch dir w/ invalid root docker-compose.yml →
+// exits non-zero + stderr non-empty. Uses runCenvkitSplit.
+func TestValidate_Positive(t *testing.T) {
+	if !dockerAvailable() {
+		t.Skip("SMOKE_SKIP_DOCKER=1")
+	}
+	root := stageMonorepo(t)
+	stdout, stderr, err := runCenvkitSplit(t, root, []string{"COMPOSE_ENV=dev"}, "validate")
+	if err != nil {
+		t.Fatalf("[A-pos] validate COMPOSE_ENV=dev: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+	// A-pos-1: exit 0 — already confirmed by err==nil
+	// A-pos-2: stdout must contain "config valid"
+	if !strings.Contains(stdout, "config valid") {
+		t.Fatalf("[A-pos-2] stdout must contain 'config valid', got: %q", stdout)
+	}
+}
+
+func TestValidate_Negative_InvalidCompose(t *testing.T) {
+	if !dockerAvailable() {
+		t.Skip("SMOKE_SKIP_DOCKER=1")
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644)
+	// intentionally malformed YAML — flow sequence never closed
+	os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  web:\n    image: busybox\n  BADKEY: [broken\n"), 0o644)
+
+	_, stderr, err := runCenvkitSplit(t, dir, nil, "validate")
+	// A-neg-1: must exit non-zero
+	if err == nil {
+		t.Fatalf("[A-neg-1] validate with invalid compose must exit non-zero")
+	}
+	// A-neg-2: stderr must carry the error message
+	if strings.TrimSpace(stderr) == "" {
+		t.Fatalf("[A-neg-2] stderr must be non-empty on validate failure")
+	}
+}
+
+// [A2] validate --all (docker-gated): exits 0 + stdout contains BOTH
+// "dev config valid" AND "prod config valid". (2 assertions)
+func TestValidate_All(t *testing.T) {
+	if !dockerAvailable() {
+		t.Skip("SMOKE_SKIP_DOCKER=1")
+	}
+	root := stageMonorepo(t)
+	stdout, stderr, err := runCenvkitSplit(t, root, nil, "validate", "--all")
+	if err != nil {
+		t.Fatalf("[A2] validate --all: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+	// A2-1: "dev config valid" in stdout
+	if !strings.Contains(stdout, "dev config valid") {
+		t.Fatalf("[A2-1] stdout must contain 'dev config valid', got: %q", stdout)
+	}
+	// A2-2: "prod config valid" in stdout
+	if !strings.Contains(stdout, "prod config valid") {
+		t.Fatalf("[A2-2] stdout must contain 'prod config valid', got: %q", stdout)
+	}
+}
+
+// [B] env-debug --files two-group on the real monorepo (non-docker).
+// Guards the two-section structure: interpolation header + runtime-only header,
+// correct service grouping, and the hard boundary (.web.env NOT under interpolation).
+// (7 assertions)
+func TestEnvDebug_Files_TwoGroup(t *testing.T) {
+	root := stageMonorepo(t)
+	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--files")
+	if err != nil {
+		t.Fatalf("[B] env-debug --files: %v\n%s", err, out)
+	}
+	// B-1: interpolation section header present
+	if !strings.Contains(out, "interpolation (COMPOSE_ENV_FILES):") {
+		t.Fatalf("[B-1] expected 'interpolation (COMPOSE_ENV_FILES):' section header:\n%s", out)
+	}
+	// B-2: runtime-only section header present
+	if !strings.Contains(out, "runtime-only") {
+		t.Fatalf("[B-2] expected 'runtime-only' section header:\n%s", out)
+	}
+	// B-3: .env appears in output (under interpolation)
+	if !strings.Contains(out, ".env") {
+		t.Fatalf("[B-3] expected .env path in output:\n%s", out)
+	}
+	// B-4: web: heading in runtime-only section
+	if !strings.Contains(out, "web:") {
+		t.Fatalf("[B-4] expected 'web:' service heading in runtime-only section:\n%s", out)
+	}
+	// B-5: .web.env appears under the web service block
+	if !strings.Contains(out, ".web.env") {
+		t.Fatalf("[B-5] expected .web.env in web service block:\n%s", out)
+	}
+	// B-6: .web.dev.env also appears under web (COMPOSE_ENV=dev tier)
+	if !strings.Contains(out, ".web.dev.env") {
+		t.Fatalf("[B-6] expected .web.dev.env in web service block (dev tier):\n%s", out)
+	}
+	// B-7: .web.env must NOT appear on a line before the runtime-only header
+	// (i.e. it must not be in the interpolation section). Split on the runtime-only
+	// boundary and assert .web.env is absent from the interpolation half.
+	parts := strings.SplitN(out, "runtime-only", 2)
+	if len(parts) == 2 && strings.Contains(parts[0], ".web.env") {
+		t.Fatalf("[B-7] .web.env must NOT appear in the interpolation section (Layer-1 only):\n%s", parts[0])
+	}
+}
+
+// [B2] --files --json + --chain --json Layer-1-only schema (non-docker).
+// .files and .chain_files contain a path ending ".env" but NO element ending
+// ".web.env"/".api.env"/".reports.env". services[web].env_files contains a path
+// ending ".web.env". (4 assertions)
+func TestEnvDebug_Files_JSON_L1Only(t *testing.T) {
+	root := stageMonorepo(t)
+	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--files", "--json")
+	if err != nil {
+		t.Fatalf("[B2-files] env-debug --files --json: %v\n%s", err, out)
+	}
+	var rep provenanceReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil {
+		t.Fatalf("[B2-files] JSON parse: %v\n%s", err, out)
+	}
+	serviceEnvSuffixes := []string{".web.env", ".api.env", ".reports.env"}
+
+	// B2-1: .files contains an element ending ".env" (Layer-1 present)
+	hasEnvFile := false
+	for _, f := range rep.Files {
+		if strings.HasSuffix(f, ".env") && !strings.HasSuffix(f, ".dev.env") && !strings.HasSuffix(f, ".prod.env") {
+			hasEnvFile = true
+		}
+	}
+	if !hasEnvFile {
+		t.Fatalf("[B2-1] .files must contain an element ending '.env': %v", rep.Files)
+	}
+	// B2-2: .files must NOT contain any service env_file: path
+	for _, f := range rep.Files {
+		for _, suf := range serviceEnvSuffixes {
+			if strings.HasSuffix(f, suf) {
+				t.Fatalf("[B2-2] .files must NOT contain service env_file path ending %q (Layer-1 only): %v", suf, rep.Files)
+			}
+		}
+	}
+	// B2-3: .chain_files same Layer-1-only constraint
+	for _, f := range rep.ChainFiles {
+		for _, suf := range serviceEnvSuffixes {
+			if strings.HasSuffix(f, suf) {
+				t.Fatalf("[B2-3] .chain_files must NOT contain service env_file path ending %q: %v", suf, rep.ChainFiles)
+			}
+		}
+	}
+	// B2-4: services[web].env_files contains a path ending ".web.env"
+	webEnvFiles := false
+	for _, svc := range rep.Services {
+		if svc.Service != "web" {
+			continue
+		}
+		for _, ef := range svc.EnvFiles {
+			if strings.HasSuffix(ef, ".web.env") {
+				webEnvFiles = true
+			}
+		}
+	}
+	if !webEnvFiles {
+		t.Fatalf("[B2-4] services[web].env_files must contain a path ending '.web.env'")
+	}
+}
+
+// [C2] --trace --var REPORTS_PORT deep gap (non-docker): gap annotation present +
+// a runtime line whose absolute path ends "services/reports/.reports.env". (2 assertions)
+func TestEnvDebug_Trace_REPORTS_PORT_DeepGap(t *testing.T) {
+	root := stageMonorepo(t)
+	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--trace", "--var", "REPORTS_PORT")
+	if err != nil {
+		t.Fatalf("[C2] env-debug --trace --var REPORTS_PORT: %v\n%s", err, out)
+	}
+	// C2-1: gap annotation present (REPORTS_PORT is service-env_file-only → gap)
+	if !strings.Contains(out, "gap") {
+		t.Fatalf("[C2-1] expected gap annotation in --trace REPORTS_PORT output:\n%s", out)
+	}
+	// C2-2: runtime line whose abs path ends services/reports/.reports.env
+	if !strings.Contains(out, filepath.Join("services", "reports", ".reports.env")) {
+		t.Fatalf("[C2-2] expected runtime path ending 'services/reports/.reports.env':\n%s", out)
+	}
+}
+
+// [D1] Default chain fallback — no .docker-env-chain: three standard files
+// (.env, .dev.env, .secrets.env) present → env-files lists them in order. (3 assertions)
+func TestChain_DefaultFallback(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("BASE=1\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".dev.env"), []byte("TIER=1\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".secrets.env"), []byte("S=1\n"), 0o644)
+
+	out, err := runCenvkit(t, dir, []string{"COMPOSE_ENV=dev"}, "env-files")
+	if err != nil {
+		t.Fatalf("[D1] env-files (default chain): %v\n%s", err, out)
+	}
+	lines := nonEmpty(strings.Split(strings.TrimSpace(out), "\n"))
+	// D1-1: .env present
+	if !strings.HasSuffix(lines[0], ".env") {
+		t.Fatalf("[D1-1] first entry must end '.env', got %q", lines[0])
+	}
+	// D1-2: .dev.env present and after .env
+	if len(lines) < 2 || !strings.HasSuffix(lines[1], ".dev.env") {
+		t.Fatalf("[D1-2] second entry must end '.dev.env', got %v", lines)
+	}
+	// D1-3: .secrets.env present and last
+	if len(lines) < 3 || !strings.HasSuffix(lines[2], ".secrets.env") {
+		t.Fatalf("[D1-3] third entry must end '.secrets.env', got %v", lines)
+	}
+}
+
+// [D2] Named-missing chain file skipped (scratch): .docker-env-chain lists
+// .env, .missing.env, .secrets.env; only .env + .secrets.env exist → env-files
+// lists only those two; .missing.env absent; exits 0. (3 assertions)
+func TestChain_MissingFileSkipped(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".docker-env-chain"), []byte(".env\n.missing.env\n.secrets.env\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".secrets.env"), []byte("S=1\n"), 0o644)
+	// .missing.env intentionally NOT created
+
+	out, err := runCenvkit(t, dir, nil, "env-files")
+	// D2-1: exits 0 (missing file is skipped, not fatal)
+	if err != nil {
+		t.Fatalf("[D2-1] env-files must exit 0 when a named file is absent: %v\n%s", err, out)
+	}
+	// D2-2: .env and .secrets.env present
+	lines := nonEmpty(strings.Split(strings.TrimSpace(out), "\n"))
+	hasEnv, hasSecrets := false, false
+	for _, l := range lines {
+		if strings.HasSuffix(l, ".env") && !strings.HasSuffix(l, ".secrets.env") {
+			hasEnv = true
+		}
+		if strings.HasSuffix(l, ".secrets.env") {
+			hasSecrets = true
+		}
+	}
+	if !hasEnv || !hasSecrets {
+		t.Fatalf("[D2-2] expected .env and .secrets.env in output, got: %v", lines)
+	}
+	// D2-3: .missing.env NOT present
+	if strings.Contains(out, ".missing.env") {
+		t.Fatalf("[D2-3] .missing.env must not appear in output (file absent → skip):\n%s", out)
+	}
+}
+
+// [D3] ${COMPOSE_ENV} root-chain alias (scratch): .docker-env-chain uses
+// .${COMPOSE_ENV}.env token; COMPOSE_ENV=test; .test.env exists → env-files
+// includes abs path ending ".test.env". (1 assertion)
+func TestChain_ComposeEnvToken(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".docker-env-chain"), []byte(".env\n.${COMPOSE_ENV}.env\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".test.env"), []byte("T=1\n"), 0o644)
+
+	out, err := runCenvkit(t, dir, []string{"COMPOSE_ENV=test"}, "env-files")
+	if err != nil {
+		t.Fatalf("[D3] env-files COMPOSE_ENV=test: %v\n%s", err, out)
+	}
+	// D3-1: abs path ending ".test.env" must appear (token substituted)
+	if !strings.Contains(out, ".test.env") {
+		t.Fatalf("[D3-1] expected path ending '.test.env' in output (token substituted):\n%s", out)
+	}
+}
+
+// [D4] Quoted/comment/blank chain parsing (acceptance level, scratch).
+// .env with Q1="hello world", Q2='x y', a # comment, a blank line →
+// --value --var Q1 == "hello world"; --value --var Q2 == "x y". (2 assertions)
+func TestChain_QuotedCommentBlankParsing(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("Q1=\"hello world\"\nQ2='x y'\n# comment\n\nOTHER=val\n"), 0o644)
+
+	// D4-1: Q1 strips double-quotes → hello world
+	out1, err := runCenvkit(t, dir, nil, "env-debug", "--value", "--var", "Q1")
+	if err != nil {
+		t.Fatalf("[D4-1] --value --var Q1: %v\n%s", err, out1)
+	}
+	if strings.TrimSpace(out1) != "hello world" {
+		t.Fatalf("[D4-1] --value --var Q1 = %q, want 'hello world'", strings.TrimSpace(out1))
+	}
+	// D4-2: Q2 strips single-quotes → x y
+	out2, err := runCenvkit(t, dir, nil, "env-debug", "--value", "--var", "Q2")
+	if err != nil {
+		t.Fatalf("[D4-2] --value --var Q2: %v\n%s", err, out2)
+	}
+	if strings.TrimSpace(out2) != "x y" {
+		t.Fatalf("[D4-2] --value --var Q2 = %q, want 'x y'", strings.TrimSpace(out2))
+	}
+}
+
+// [E] compose-go load failure fatal (scratch, non-docker): intentionally malformed
+// docker-compose.yml → `env-debug --files` exits non-zero + stderr carries the error.
+// Uses runCenvkitSplit to separate stdout/stderr. (2 assertions)
+func TestEnvDebug_Files_ComposeLoadError(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644)
+	// malformed: flow sequence never closed → parse error from compose-go
+	os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  web:\n    image: busybox\n  BADKEY: [broken\n"), 0o644)
+
+	_, stderr, err := runCenvkitSplit(t, dir, nil, "env-debug", "--files")
+	// E-1: exit non-zero
+	if err == nil {
+		t.Fatalf("[E-1] env-debug --files on malformed compose must exit non-zero")
+	}
+	// E-2: stderr carries the error (compose-go YAML parse error)
+	if strings.TrimSpace(stderr) == "" {
+		t.Fatalf("[E-2] stderr must be non-empty on compose load failure")
+	}
+}
+
+// ─── end gap-report batch ─────────────────────────────────────────────────────
+
+// ─── color / ANSI no-leak guards ─────────────────────────────────────────────
+//
+// The acceptance assertions above run non-TTY/CI, so their literal-string
 // matches already guard against leaked ANSI escapes (a stray \x1b would break
 // strings.Contains checks). These extra tests make the no-leak contract
 // explicit and also verify --color=always forces ANSI when requested.
 
 // TestColor_NoLeak_DefaultNonTTY: the default (auto) color mode on a non-TTY
-// process produces no ANSI escapes. This is also an implicit guard for all 78
+// process produces no ANSI escapes. This is also an implicit guard for the
 // acceptance assertions above — they all run in non-TTY environments.
 func TestColor_NoLeak_DefaultNonTTY(t *testing.T) {
 	dir := t.TempDir()
