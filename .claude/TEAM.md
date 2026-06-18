@@ -69,7 +69,9 @@ notifications and sends ONE source-of-truth message when clearing confusion.
 Security/migrations/the compose-go engine contract/hard-to-reverse → lead spawns
 a **fresh** teammate in plan-mode (`mode:"plan"`): read-only plan → lead approval
 → implementation. Never a manual "send plan, wait OK" gate on a reused idle agent
-(mailbox crossover).
+(mailbox crossover). **On approval, explicitly tell the teammate to "exit plan
+mode and implement"** — a plain "approved" can leave a plan-mode agent idle/gated
+(it stalled go-engineer-c2 until a re-sent explicit nudge unblocked it).
 
 ## Planning & cross-module assumptions
 

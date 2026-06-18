@@ -30,6 +30,12 @@ You own **tests** for the `cenvkit` rewrite. Read `.claude/TEAM.md` at task star
   ./test/...`). The assertion count lives in ONE place — the file-header comment;
   never add inline per-section running tallies (they go stale — they recurred 3×
   and were consolidated 2026-06-17).
+- **New fixtures = a TRACKED `example.*` template + a `stageMonorepo` seed entry —
+  NEVER a gitignored `.X` runtime dotfile.** A root-level `.X.env` matches
+  `.gitignore`'s `.*.env`, so it won't commit → the test breaks on a fresh
+  checkout. Verify the fresh-checkout path: `rm -f examples/monorepo/<dotfile> &&
+  go test ./test/...` must still pass (proves `stageMonorepo` seeds it). (The
+  `.ci.env` near-miss, 2026-06-19.)
 - **contract-seam tests** at layer boundaries (chain output ↔ engine input ↔
   what `docker compose` consumes): a green unit test on each side does not catch
   drift between them.

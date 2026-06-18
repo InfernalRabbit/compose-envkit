@@ -49,7 +49,9 @@ implementation. Design:
   `go test ./... -count=1` AND the docker acceptance path (`go test ./test/...`
   with docker up). NEVER report green on `SMOKE_SKIP_DOCKER=1` alone, nor on
   `go test` without `gofmt` — both have shipped real misses (a docker-gated
-  assertion unrun under a behavior change; gofmt, twice).
+  assertion unrun under a behavior change; gofmt, thrice). **Re-run `gofmt -l .`
+  AFTER your final edit before reporting green — a pass from an earlier run (a late
+  edit not re-checked) is the recurring miss.**
 
 ## Conventions
 

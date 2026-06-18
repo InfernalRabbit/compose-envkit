@@ -6,3 +6,4 @@
 - [SmartDriver SH kit already current](smartdriver-sh-kit-already-current.md) — 2026-06-17: don't migrate/re-source SmartDriver's sh kit (already ≈v0.2.0 + better-adapted); SH is frozen/EOL, only Go cenvkit has a future
 - [Workflow authoring gotchas](workflow-authoring-gotchas.md) — escape ${...} in workflow prompt template literals (JS interpolates → instant fail); no Date.now/rand; read full result from the output file
 - [Competitive landscape & positioning](competitive-landscape-positioning.md) — 2026-06-18 verified scan: only uncontested moat = compose env_file:→${VAR} gap-debugger; generic populator + non-compose provenance is crowded (mise/Dynaconf). "Not only compose" risks the moat
+- [C1–C4 build orchestration](cenvkit-c1-c4-build-orchestration.md) — 2026-06-19: populator+gap-debugger build shipped+merged to master; the plan-gate→parallel-build→committed-tree-gate cadence + the 5 broken-HEAD issues the disk-gate caught

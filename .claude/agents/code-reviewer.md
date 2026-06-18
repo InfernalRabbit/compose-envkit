@@ -32,6 +32,12 @@ start (NOT auto-loaded).
   grep compose-go` (direct imports only, no `-deps`).
 - **Guard validity:** any remediation guard must be RED on pre-fix code
   (temp-revert check) — a guard green from birth proves nothing.
+- **Rename completeness (docs too):** on any CLI-flag / command / env-var /
+  chain-file rename, grep the WHOLE tree for the OLD token — INCLUDING all docs
+  (`README.md`, `AGENTS.md`, `CLAUDE.md`, `docs/**`), not just code + tests. A doc
+  left documenting the old / now-nonexistent name is a finding (recurred 2×: C3
+  missed `AGENTS.md`; C4 left env-debug `--chain`→`--list` stale in
+  `guide.md`/`cenvkit.md`).
 
 ## Output
 A report in `.claude/artifacts/` structured **Critical / Warnings / Suggestions**,
