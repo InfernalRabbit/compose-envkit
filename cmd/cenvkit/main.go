@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -64,10 +65,21 @@ func newRootCmd() *cobra.Command {
 		},
 	})
 	root.AddCommand(newEnvFilesCmd(), newComposeCmd(), newValidateCmd(),
-		newInitCmd(), newEnvDebugCmd())
+		newInitCmd(), newEnvDebugCmd(), newGapReportCmd())
 	// COMPOSE_DEPTH is accepted-but-ignored (spec §5): include-graph load makes it obsolete.
 	return root
 }
+
+// exitError carries a process exit code out of a command's RunE so main() can
+// os.Exit with it. An empty msg means the command already wrote its own output
+// (e.g. the gap report) and only the code should propagate.
+type exitError struct {
+	code int
+	msg  string
+}
+
+func (e *exitError) Error() string { return e.msg }
+func (e *exitError) ExitCode() int { return e.code }
 
 // resolveProjectDir honors --project-dir, defaulting to the current directory.
 // --project-dir is a PERSISTENT flag on the root. cmd.Flags() does NOT surface it
@@ -356,12 +368,75 @@ func pick(enabled bool, name string) string {
 	return ""
 }
 
+// newGapReportCmd is the daemon-free CI/pre-build lint over the EXISTING gap set
+// (engine.Provenance's VarTrace.Gap, internal/engine/provenance.go:424). It loads
+// the compose model in process — never execs docker — and maps the result to a
+// distinct exit-code contract via exitError: gaps found => 1, clean => 0, no
+// compose file discovered => 2 (a misconfiguration, NOT a clean pass; spec §6).
+func newGapReportCmd() *cobra.Command {
+	var jsonOut bool
+	c := &cobra.Command{
+		Use:   "gap-report",
+		Short: "Report env_file:->${VAR} interpolation gaps (CI/pre-build lint; daemon-free)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			dir, err := resolveProjectDir(cmd)
+			if err != nil {
+				return err
+			}
+			cr, err := chain.Resolve(chain.Input{ProjectDir: dir, OSEnv: os.Environ(), Hostname: os.Hostname})
+			if err != nil {
+				return err
+			}
+			// No compose file => the lint cannot run; for a pre-build check that is a
+			// misconfiguration, NOT a clean pass. Exit 2 (distinct from 1=gaps/0=clean).
+			if !engine.HasComposeFileEnv(dir, cr.Vars) {
+				return &exitError{code: 2, msg: "no compose file found in " + dir}
+			}
+			pf := make([]engine.ProvFile, 0, len(cr.Files))
+			for _, f := range cr.Files {
+				pf = append(pf, engine.ProvFile{Path: f, Layer: "layer1"})
+			}
+			profiles := splitProfiles(envValue(cr.Vars, "COMPOSE_PROFILES"))
+			rep, err := engine.New().Provenance(cmd.Context(), engine.ProvInput{
+				ProjectDir: dir, Env: cr.Vars, Profiles: profiles, EnvFiles: pf,
+			})
+			if err != nil {
+				return err
+			}
+			gr := provenance.CollectGaps(rep)
+			out := cmd.OutOrStdout()
+			if jsonOut {
+				if err := provenance.RenderGapReportJSON(out, gr); err != nil {
+					return err
+				}
+			} else {
+				provenance.RenderGapReportHuman(out, gr, currentStyler())
+			}
+			if gr.Count > 0 {
+				return &exitError{code: 1} // gaps found; report already printed (no extra msg)
+			}
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&jsonOut, "json", false, "machine-readable JSON")
+	return c
+}
+
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
 		// Errors go to stderr in red (spec §4). Gate on STDERR's TTY (not stdout,
 		// which the PersistentPreRun styler used) and honor --color via a best-effort
 		// args scan — the pre-run may not have run if parsing itself failed.
 		es := style.Resolve(colorFlagFromArgs(os.Args), os.Stderr)
+		// exitError carries a command's own exit code (e.g. gap-report 1/2). An empty
+		// msg means the command already wrote its output; only the code propagates.
+		var ee *exitError
+		if errors.As(err, &ee) {
+			if ee.msg != "" {
+				fmt.Fprintln(os.Stderr, es.ErrorMsg("cenvkit: "+ee.msg))
+			}
+			os.Exit(ee.code)
+		}
 		fmt.Fprintln(os.Stderr, es.ErrorMsg("cenvkit: "+err.Error()))
 		os.Exit(1)
 	}

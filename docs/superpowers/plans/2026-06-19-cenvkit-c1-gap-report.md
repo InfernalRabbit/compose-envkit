@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Go:** `gofmt -l .` MUST be empty; `go vet ./...` clean; `go build ./...`; `go test ./... -count=1` green. (Verification gate per CLAUDE.md; the docker acceptance path is gated but gap-report itself is daemon-free.)
-- **Seam:** `internal/provenance` imports NEITHER compose-go NOR `internal/engine` (CI seam check in `test/seam_test.go`). New file `gapreport.go` may import only stdlib.
+- **Seam:** `internal/provenance` imports NEITHER compose-go NOR `internal/engine`; new file `gapreport.go` imports stdlib ONLY (encoding/json, fmt, io, sort). The seam is held by the package-doc convention (`internal/provenance/model.go:2-4`) + stdlib-only imports — there is NO automated import-leak guard (NOTE: `test/seam_test.go` is the chain→engine *enumeration* contract, NOT an import guard — don't cite it as one). A real import-leak test is a possible future improvement, out of C1 scope.
 - **Exit-code contract (spec §6):** `1` = one or more gaps; `0` = clean (compose file present, no gaps); `2` = no compose file discovered (misconfiguration — NOT a clean pass).
 - **Daemon-free:** `gap-report` MUST NOT exec docker; it loads the compose model in-process via the existing `engine.Provenance`. Acceptance runs under `SMOKE_SKIP_DOCKER=1`.
 - **JSON is never styled** (machine output ANSI-free regardless of `--color`).

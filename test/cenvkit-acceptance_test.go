@@ -1,5 +1,5 @@
 // Package acceptance ports the smoke-monorepo.sh and smoke.sh suites to drive the
-// cenvkit binary directly. Current assertion count: 111.
+// cenvkit binary directly. Current assertion count: 115.
 //
 // Invocation map (replaces all ./docker / run_shim calls):
 //
@@ -33,15 +33,17 @@
 //	+28 gap-report batch A/A2/B/B2/C2/D1–D4/E (#11)
 //	+1  corrected C1: --value on env_file-only var is empty (#11 follow-up)
 //	+3  #12: gap-value render-only strip guard + empty-chain hint acceptance
+//	+4  C1: gap-report exit-code contract (exit 1/0/2 + --json shape)
 //	────
-//	111 total
+//	115 total
 //
 // Note: TestC1_SinglePassLayerContract and TestD1_RuntimeFatalMissingRequired use
-// throwaway fixtures and guard contract seams — they are included in the 111 count.
+// throwaway fixtures and guard contract seams — they are included in the 115 count.
 package acceptance
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1759,6 +1761,132 @@ func TestEnvDebug_Files_ComposeLoadError(t *testing.T) {
 }
 
 // ─── end gap-report batch ─────────────────────────────────────────────────────
+
+// ─── C1: gap-report exit-code contract (daemon-free acceptance) ──────────────
+//
+// These tests drive the BUILT cenvkit binary against a hermetic temp fixture
+// (compose.yaml + web.env + .env). gap-report never execs docker, so they run
+// under SMOKE_SKIP_DOCKER=1. The fixture is a minimal reproduction of the #3435
+// gap: web service references ${WEB_PORT:-0} in ports, but WEB_PORT is only
+// defined in a service env_file: (web.env), not in the Layer-1 chain (.env).
+//
+// envWithout returns os.Environ() minus the named keys so the child binary does
+// not inherit a WEB_PORT (or COMPOSE_* override) that would mask the gap.
+func envWithout(keys ...string) []string {
+	skip := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		skip[k] = struct{}{}
+	}
+	var out []string
+	for _, kv := range os.Environ() {
+		k := kv
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			k = kv[:i]
+		}
+		if _, excluded := skip[k]; !excluded {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// writeGapAcceptFixture creates a temp dir with:
+//
+//	compose.yaml — web service env_file: [web.env] + ports: ["${WEB_PORT:-0}:80"]
+//	web.env      — WEB_PORT=8080  (service env_file: only — the gap)
+//	.env         — empty (gap case) or WEB_PORT=8080 (clean case)
+func writeGapAcceptFixture(t *testing.T, inChain bool) string {
+	t.Helper()
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "compose.yaml"),
+		[]byte("services:\n  web:\n    image: nginx\n    env_file:\n      - web.env\n    ports:\n      - \"${WEB_PORT:-0}:80\"\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "web.env"), []byte("WEB_PORT=8080\n"), 0o644)
+	env := ""
+	if inChain {
+		env = "WEB_PORT=8080\n"
+	}
+	os.WriteFile(filepath.Join(dir, ".env"), []byte(env), 0o644)
+	return dir
+}
+
+// gapExitCode extracts the process exit code from an exec error; returns 0 if err==nil.
+func gapExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var xe *exec.ExitError
+	if errors.As(err, &xe) {
+		return xe.ExitCode()
+	}
+	return -1
+}
+
+// [C1-gap1] gap-report exits 1 on a seeded gap (WEB_PORT env_file:-only).
+// [C1-gap2] gap-report exits 0 when WEB_PORT is also in the Layer-1 .env.
+// [C1-gap3] gap-report exits 2 when there is no compose file in the dir.
+// [C1-gap4] gap-report --json exits 1 + output contains "count": 1 and "var": "WEB_PORT".
+func TestGapReport_ExitCodeContract(t *testing.T) {
+	// These tests are daemon-free; run under SMOKE_SKIP_DOCKER=1 too.
+	cleanEnv := envWithout("COMPOSE_FILE", "COMPOSE_ENV_FILES", "COMPOSE_ENV", "WEB_PORT")
+
+	// C1-gap1: seeded gap → exit 1
+	gapDir := writeGapAcceptFixture(t, false)
+	out1, err1 := func() (string, error) {
+		c := exec.Command(cenvkitBin, "gap-report", "--project-dir", gapDir)
+		c.Env = cleanEnv
+		b, err := c.CombinedOutput()
+		return string(b), err
+	}()
+	if gapExitCode(err1) != 1 {
+		t.Fatalf("[C1-gap1] want exit 1 (gap found), got %d\nout: %s", gapExitCode(err1), out1)
+	}
+	if !strings.Contains(out1, "WEB_PORT") {
+		t.Fatalf("[C1-gap1] gap output must mention WEB_PORT:\n%s", out1)
+	}
+
+	// C1-gap2: WEB_PORT in Layer-1 chain → exit 0 (clean)
+	cleanDir := writeGapAcceptFixture(t, true)
+	out2, err2 := func() (string, error) {
+		c := exec.Command(cenvkitBin, "gap-report", "--project-dir", cleanDir)
+		c.Env = cleanEnv
+		b, err := c.CombinedOutput()
+		return string(b), err
+	}()
+	if gapExitCode(err2) != 0 {
+		t.Fatalf("[C1-gap2] want exit 0 (clean), got %d\nout: %s", gapExitCode(err2), out2)
+	}
+
+	// C1-gap3: no compose file → exit 2 (misconfiguration)
+	noComposeDir := t.TempDir()
+	os.WriteFile(filepath.Join(noComposeDir, ".env"), []byte("FOO=bar\n"), 0o644)
+	_, err3 := func() (string, error) {
+		c := exec.Command(cenvkitBin, "gap-report", "--project-dir", noComposeDir)
+		c.Env = cleanEnv
+		b, err := c.CombinedOutput()
+		return string(b), err
+	}()
+	if gapExitCode(err3) != 2 {
+		t.Fatalf("[C1-gap3] want exit 2 (no compose file), got %d", gapExitCode(err3))
+	}
+
+	// C1-gap4: --json → exit 1 + JSON schema contains count and var name
+	out4, err4 := func() (string, error) {
+		c := exec.Command(cenvkitBin, "gap-report", "--project-dir", gapDir, "--json")
+		c.Env = cleanEnv
+		b, err := c.CombinedOutput()
+		return string(b), err
+	}()
+	if gapExitCode(err4) != 1 {
+		t.Fatalf("[C1-gap4] want exit 1, got %d\nout: %s", gapExitCode(err4), out4)
+	}
+	for _, want := range []string{`"count": 1`, `"var": "WEB_PORT"`} {
+		if !strings.Contains(out4, want) {
+			t.Fatalf("[C1-gap4] json missing %q:\n%s", want, out4)
+		}
+	}
+}
+
+// ─── end C1: gap-report exit-code contract ───────────────────────────────────
 
 // ─── color / ANSI no-leak guards ─────────────────────────────────────────────
 //
