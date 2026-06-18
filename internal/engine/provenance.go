@@ -58,7 +58,7 @@ func ParseOrderedLiteral(path string) ([]provenance.OverviewEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var entries []provenance.OverviewEntry
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {

@@ -29,3 +29,8 @@ services:
       - "${WEB_PORT:-0}:80"
     environment:
       WEB_PORT: "${WEB_PORT:-0}"
+      # Root tier flag, surfaced on web (the unified stack's user-facing service).
+      # Chain-interpolated: true in dev / false in prod, selected by CENVKIT_ENV
+      # via .dev.env / .prod.env. Lives here (not the root) because the root must
+      # not redefine an include:-imported service.
+      IS_DEV: "${IS_DEV:-unset}"

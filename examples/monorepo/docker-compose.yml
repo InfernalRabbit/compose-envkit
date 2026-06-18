@@ -1,10 +1,13 @@
 # ============================================
 # Root compose — the UNIFIED stack, run from the repo root.
 #
-# It `include:`s each subproject's own compose file and adds the cross-cutting
-# bits that only make sense for the whole stack: a shared network and any
-# cross-service startup ordering. Each subproject still runs standalone from its
-# own dir (see web/ and api/); this file just composes them into one stack.
+# It `include:`s each subproject's own compose file. Each subproject defines its
+# OWN service; the root does NOT redefine them. Docker Compose deliberately does
+# not merge an `include:`-imported service with a same-named root `services:`
+# entry — it errors (docker/compose #11488). So cross-cutting bits that belong to
+# one subproject live in that subproject's own file (e.g. web's IS_DEV tier flag,
+# moved into web/docker-compose.yml). Each subproject still runs standalone from
+# its own dir (see web/ and api/); this file just composes them into one stack.
 #
 # Requires Docker Compose v2.24+ (for `env_file: required:` and `include:`).
 #
@@ -23,28 +26,9 @@ include:
   - path: ./services/reports/docker-compose.yml   # nested one level deeper (services/<svc>/)
 
 services:
-  # Cross-service wiring for services defined in the included subproject files.
-  # Attach them to the shared network and order api after web as an example of
-  # root-only orchestration (subprojects don't know about each other).
-  web:
-    networks: [shared]
-    environment:
-      # Demo of the root IS_DEV tier value reaching a service (true in dev,
-      # false in prod — selected by CENVKIT_ENV via .dev.env / .prod.env).
-      IS_DEV: "${IS_DEV:-unset}"
-
-  api:
-    networks: [shared]
-    depends_on:
-      web: { condition: service_started }
-
-  # A deeper subproject (services/reports/) — nested one extra level under
-  # services/. Reached via the include: graph from the root. Joins the shared network.
-  reports:
-    networks: [shared]
-
   # Optional helper — OFF by default, enabled with COMPOSE_PROFILES=tools.
-  # Demonstrates compose-envkit's profiles passthrough: the ./docker shim
+  # tools is root-OWNED (not imported via include:), so it MAY join the shared
+  # network and demonstrates compose-envkit's profiles passthrough: the shim
   # forwards COMPOSE_PROFILES to `docker compose` unchanged (no kit state).
   tools:
     image: busybox

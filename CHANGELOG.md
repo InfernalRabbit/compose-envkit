@@ -6,6 +6,24 @@ to [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-19
+
+### Fixed — first green CI · Docker Compose portability
+
+- **The example monorepo no longer redefines `include:`-imported services.** The
+  root `docker-compose.yml` redefined `web`/`api`/`reports` (pulled in via
+  `include:`) to bolt on a shared network + `depends_on` — which Docker Compose
+  refuses to merge (`services.web conflicts with imported resource`;
+  docker/compose#11488). It only appeared to work on a tolerant local engine; the
+  CI runner's Compose (v2.38.2) rejected it, leaving CI red. The root now redefines
+  no imported service (`IS_DEV` moves into `web/`'s own file) — valid on Docker
+  Compose **v2.24+**. The cross-subproject `depends_on` ordering + shared-network
+  attach (never valid under `include:`) are dropped.
+- **CI**: the docker-acceptance job installs the latest Docker Compose (not the
+  runner's pinned v2.38.2); the unit-test matrix runs docker-free; `dockerAvailable()`
+  now probes the real daemon, so `go test ./...` skips docker tests on a host without it.
+- All `golangci-lint` (errcheck / staticcheck) findings cleared across prod and tests.
+
 ### Added — named chains: `--chain <name>` (C4)
 
 - `.cenvkit.envchain` may now carry optional INI-style `[name]` sections; **`--chain

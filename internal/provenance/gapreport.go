@@ -68,13 +68,13 @@ func RenderGapReportJSON(w io.Writer, gr GapReport) error {
 func RenderGapReportHuman(w io.Writer, gr GapReport, s Styler) {
 	sty := st(s)
 	if gr.Count == 0 {
-		fmt.Fprintln(w, sty.Ok("no env_file→interpolation gaps"))
+		_, _ = fmt.Fprintln(w, sty.Ok("no env_file→interpolation gaps"))
 		return
 	}
 	for _, g := range gr.Gaps {
-		fmt.Fprintf(w, "%s\n", sty.Gap(fmt.Sprintf(
+		_, _ = fmt.Fprintf(w, "%s\n", sty.Gap(fmt.Sprintf(
 			"⚠ gap: ${%s} used in service %s %s resolves to %q at the run (defined only in a service env_file:).",
 			g.Var, g.Service, g.Field, g.Fallback)))
 	}
-	fmt.Fprintf(w, "%s\n", sty.Fail(fmt.Sprintf("%d gap(s) found", gr.Count)))
+	_, _ = fmt.Fprintf(w, "%s\n", sty.Fail(fmt.Sprintf("%d gap(s) found", gr.Count)))
 }

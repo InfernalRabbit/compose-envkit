@@ -24,7 +24,9 @@ Python, no Node).
 ## Install — cenvkit (the Go CLI, v1 · current)
 
 `cenvkit` is built on Docker's own loader (`compose-spec/compose-go`, pinned
-v2.11.0). Two distribution modes:
+v2.11.0). `env-debug`/`gap-report` are daemon-free; `cenvkit compose`/`validate`
+shell out to your **Docker Compose v2.24+** (for `include:` + `env_file:
+required:`) and are tested in CI against the latest release. Two distribution modes:
 
 ```sh
 # Installed (recommended)

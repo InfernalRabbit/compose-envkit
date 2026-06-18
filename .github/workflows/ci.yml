@@ -88,6 +88,10 @@ jobs:
       - name: go build
         run: go build ./...
       - name: go test
+        # The unit job is docker-free on purpose (it runs on macOS too, which has
+        # no docker daemon); the acceptance-docker job covers the docker path.
+        env:
+          SMOKE_SKIP_DOCKER: "1"
         run: go test ./...
 
   acceptance-docker:
@@ -99,7 +103,14 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      # ubuntu-latest GitHub runners ship Docker + the compose plugin.
+      # ubuntu-latest ships an OLD bundled compose plugin (v2.38.2). Install the
+      # latest release so CI tracks current Docker Compose, not the runner's pin.
+      - name: Install latest Docker Compose
+        run: |
+          mkdir -p ~/.docker/cli-plugins
+          curl -fSL "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)" \
+            -o ~/.docker/cli-plugins/docker-compose
+          chmod +x ~/.docker/cli-plugins/docker-compose
       - name: docker compose version
         run: docker compose version
       - name: acceptance suite (docker)

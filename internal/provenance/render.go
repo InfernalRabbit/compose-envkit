@@ -104,7 +104,7 @@ func RenderHuman(w io.Writer, r Report, o HumanOpts) {
 	s := st(o.Style)
 	switch {
 	case o.Value != "":
-		fmt.Fprintln(w, r.Vars[o.Value].Value) // a bare value, never styled (script-friendly)
+		_, _ = fmt.Fprintln(w, r.Vars[o.Value].Value) // a bare value, never styled (script-friendly)
 	case o.Trace != "":
 		renderTrace(w, r, o.Trace, s)
 	case o.Effective:
@@ -115,11 +115,11 @@ func RenderHuman(w io.Writer, r Report, o HumanOpts) {
 		renderOverview(w, r, o, s)
 	default: // Chain == default view: Layer-1 only (Report.ChainFiles)
 		if len(r.ChainFiles) == 0 {
-			fmt.Fprintln(w, s.Hint(emptyChainHint))
+			_, _ = fmt.Fprintln(w, s.Hint(emptyChainHint))
 			return
 		}
 		for _, f := range r.ChainFiles {
-			fmt.Fprintln(w, s.Path(f))
+			_, _ = fmt.Fprintln(w, s.Path(f))
 		}
 	}
 }
@@ -139,34 +139,34 @@ const emptyChainHint = "(none — no Layer-1 chain files present; run `cenvkit i
 func renderTrace(w io.Writer, r Report, name string, s Styler) {
 	vt, ok := r.Vars[name]
 	if !ok {
-		fmt.Fprintf(w, "%s: not set\n", name)
+		_, _ = fmt.Fprintf(w, "%s: not set\n", name)
 		return
 	}
 	if vt.InChain {
 		// Normal path: the var resolves from the Layer-1 chain (or shell) — no gap.
-		fmt.Fprintf(w, "%s=%s\n", s.Key(name), s.Value(vt.Value))
-		fmt.Fprintf(w, "  winner:     %s (%s)\n", s.Path(vt.Winner.File), s.SourceLabel(vt.Winner.Layer))
+		_, _ = fmt.Fprintf(w, "%s=%s\n", s.Key(name), s.Value(vt.Value))
+		_, _ = fmt.Fprintf(w, "  winner:     %s (%s)\n", s.Path(vt.Winner.File), s.SourceLabel(vt.Winner.Layer))
 		for _, src := range vt.Overridden {
-			fmt.Fprintf(w, "  overridden: %s (%s)\n", s.Path(src.File), s.SourceLabel(src.Layer))
+			_, _ = fmt.Fprintf(w, "  overridden: %s (%s)\n", s.Path(src.File), s.SourceLabel(src.Layer))
 		}
 		for _, e := range vt.Effects {
-			fmt.Fprintf(w, "  effect:     service %s field %s -> %s\n", s.Service(e.Service), e.Field, s.Value(stripVarPrefix(name, e.Resolved)))
+			_, _ = fmt.Fprintf(w, "  effect:     service %s field %s -> %s\n", s.Service(e.Service), e.Field, s.Value(stripVarPrefix(name, e.Resolved)))
 		}
 		return
 	}
 	// Not in the interpolation chain: show the interpolation/runtime split.
-	fmt.Fprintln(w, s.Key(name))
-	fmt.Fprintln(w, "  interpolation: NOT in the Layer-1 chain -> ${"+name+"} falls back at run time")
+	_, _ = fmt.Fprintln(w, s.Key(name))
+	_, _ = fmt.Fprintln(w, "  interpolation: NOT in the Layer-1 chain -> ${"+name+"} falls back at run time")
 	for _, rd := range vt.RuntimeDefs {
-		fmt.Fprintf(w, "  runtime:       %s -> %s=%s  (service `%s` container env only)\n",
+		_, _ = fmt.Fprintf(w, "  runtime:       %s -> %s=%s  (service `%s` container env only)\n",
 			s.Path(rd.File), name, s.Value(rd.Value), s.Service(rd.Service))
 	}
 	if vt.Gap {
 		for _, e := range vt.Effects {
-			fmt.Fprintf(w, "  %s\n", s.Gap(fmt.Sprintf("⚠ gap: ${%s} used in service %s %s resolves to %q at the run, NOT the env_file value (defined only in a service env_file).",
+			_, _ = fmt.Fprintf(w, "  %s\n", s.Gap(fmt.Sprintf("⚠ gap: ${%s} used in service %s %s resolves to %q at the run, NOT the env_file value (defined only in a service env_file).",
 				name, e.Service, e.Field, stripVarPrefix(name, e.Resolved))))
 		}
-		fmt.Fprintf(w, "  fix:   add %s to the Layer-1 chain (e.g. .env), or use it runtime-only.\n", name)
+		_, _ = fmt.Fprintf(w, "  fix:   add %s to the Layer-1 chain (e.g. .env), or use it runtime-only.\n", name)
 	}
 }
 
@@ -174,14 +174,14 @@ func renderTrace(w io.Writer, r Report, name string, s Styler) {
 // set (COMPOSE_ENV_FILES = Layer 1) and the runtime-only set (service env_file:
 // paths grouped by service, NOT interpolated — container env only).
 func renderFiles(w io.Writer, r Report, s Styler) {
-	fmt.Fprintln(w, s.Header("interpolation (COMPOSE_ENV_FILES):"))
+	_, _ = fmt.Fprintln(w, s.Header("interpolation (COMPOSE_ENV_FILES):"))
 	if len(r.Files) == 0 {
-		fmt.Fprintf(w, "  %s\n", s.Hint(emptyChainHint)) // FIX 1
+		_, _ = fmt.Fprintf(w, "  %s\n", s.Hint(emptyChainHint)) // FIX 1
 	}
 	for _, f := range r.Files {
-		fmt.Fprintf(w, "  %s\n", s.Path(f))
+		_, _ = fmt.Fprintf(w, "  %s\n", s.Path(f))
 	}
-	fmt.Fprintln(w, s.Header("runtime-only (service env_file: — NOT interpolated, container env only):"))
+	_, _ = fmt.Fprintln(w, s.Header("runtime-only (service env_file: — NOT interpolated, container env only):"))
 	for _, se := range r.Services {
 		// Render the service's DECLARED env_file: paths (ServiceEnv.EnvFiles), not
 		// the per-key Entries sources — a file whose every key is inline-overridden
@@ -190,9 +190,9 @@ func renderFiles(w io.Writer, r Report, s Styler) {
 		if len(se.EnvFiles) == 0 {
 			continue
 		}
-		fmt.Fprintf(w, "  %s:\n", s.Service(se.Service))
+		_, _ = fmt.Fprintf(w, "  %s:\n", s.Service(se.Service))
 		for _, f := range se.EnvFiles {
-			fmt.Fprintf(w, "    %s\n", s.Path(f))
+			_, _ = fmt.Fprintf(w, "    %s\n", s.Path(f))
 		}
 	}
 }
@@ -213,21 +213,21 @@ func renderOverview(w io.Writer, r Report, o HumanOpts, s Styler) {
 	if title == "" || title == "." || title == string(filepath.Separator) {
 		title = o.ProjectDir
 	}
-	fmt.Fprintln(w, s.Header(fmt.Sprintf("env overview — %s (mode: overview)", title)))
+	_, _ = fmt.Fprintln(w, s.Header(fmt.Sprintf("env overview — %s (mode: overview)", title)))
 	if o.ComposeEnv != "" {
 		if o.ComposeEnvSource != "" {
-			fmt.Fprintf(w, "  CENVKIT_ENV = %s (from %s)\n", s.Value(o.ComposeEnv), s.SourceLabel(o.ComposeEnvSource))
+			_, _ = fmt.Fprintf(w, "  CENVKIT_ENV = %s (from %s)\n", s.Value(o.ComposeEnv), s.SourceLabel(o.ComposeEnvSource))
 		} else {
-			fmt.Fprintf(w, "  CENVKIT_ENV = %s\n", s.Value(o.ComposeEnv))
+			_, _ = fmt.Fprintf(w, "  CENVKIT_ENV = %s\n", s.Value(o.ComposeEnv))
 		}
 	}
 	if o.ProjectDir != "" {
-		fmt.Fprintf(w, "  Project dir = %s\n", s.Path(o.ProjectDir))
+		_, _ = fmt.Fprintf(w, "  Project dir = %s\n", s.Path(o.ProjectDir))
 	}
 
 	// Section 1 — interpolation chain (Layer-1 only).
-	fmt.Fprintln(w, "\n"+s.Header("Interpolation chain (COMPOSE_ENV_FILES)"))
-	fmt.Fprintf(w, "  %s new   %s override   %s repeat\n", s.MarkerNew(), s.MarkerOverride(), s.MarkerRepeat())
+	_, _ = fmt.Fprintln(w, "\n"+s.Header("Interpolation chain (COMPOSE_ENV_FILES)"))
+	_, _ = fmt.Fprintf(w, "  %s new   %s override   %s repeat\n", s.MarkerNew(), s.MarkerOverride(), s.MarkerRepeat())
 	chainAcc := map[string]string{}
 	chainLayers := 0
 	for _, l := range r.Layers {
@@ -235,11 +235,11 @@ func renderOverview(w io.Writer, r Report, o HumanOpts, s Styler) {
 			continue
 		}
 		chainLayers++
-		fmt.Fprintf(w, "\n  %s\n", s.Path(l.File))
+		_, _ = fmt.Fprintf(w, "\n  %s\n", s.Path(l.File))
 		renderLayerEntries(w, l.Entries, chainAcc, s)
 	}
 	if chainLayers == 0 {
-		fmt.Fprintf(w, "\n  %s\n", s.Hint(emptyChainHint)) // FIX 1
+		_, _ = fmt.Fprintf(w, "\n  %s\n", s.Hint(emptyChainHint)) // FIX 1
 	}
 
 	// Section 2 — runtime-only, per service (fresh accumulator each). Suppressed
@@ -249,9 +249,9 @@ func renderOverview(w io.Writer, r Report, o HumanOpts, s Styler) {
 	if len(services) == 0 {
 		return
 	}
-	fmt.Fprintln(w, "\n"+s.Header("Runtime-only — service env_file: (NOT interpolated)"))
+	_, _ = fmt.Fprintln(w, "\n"+s.Header("Runtime-only — service env_file: (NOT interpolated)"))
 	for _, name := range services {
-		fmt.Fprintf(w, "  %s:\n", s.Service(name))
+		_, _ = fmt.Fprintf(w, "  %s:\n", s.Service(name))
 		svcAcc := map[string]string{}
 		for _, l := range r.Layers {
 			if l.Service != name {
@@ -261,7 +261,7 @@ func renderOverview(w io.Writer, r Report, o HumanOpts, s Styler) {
 			if l.Layer == "environment" {
 				label = "inline environment:"
 			}
-			fmt.Fprintf(w, "    %s\n", s.Path(label))
+			_, _ = fmt.Fprintf(w, "    %s\n", s.Path(label))
 			renderLayerEntriesIndented(w, l.Entries, svcAcc, s)
 		}
 		renderServiceGaps(w, r, name, s)
@@ -289,11 +289,11 @@ func renderEntriesAt(w io.Writer, entries []OverviewEntry, acc map[string]string
 		key := s.Key(e.Key)
 		switch {
 		case !seen:
-			fmt.Fprintf(w, "%s%s %s = %s\n", indent, s.MarkerNew(), key, s.Value(e.RawValue))
+			_, _ = fmt.Fprintf(w, "%s%s %s = %s\n", indent, s.MarkerNew(), key, s.Value(e.RawValue))
 		case kind == "~":
-			fmt.Fprintf(w, "%s%s %s = %s %s %s\n", indent, s.MarkerOverride(), key, s.Old(old), s.Arrow(), s.Value(e.RawValue))
+			_, _ = fmt.Fprintf(w, "%s%s %s = %s %s %s\n", indent, s.MarkerOverride(), key, s.Old(old), s.Arrow(), s.Value(e.RawValue))
 		default: // ·
-			fmt.Fprintf(w, "%s%s %s = %s\n", indent, s.MarkerRepeat(), key, s.Value(e.RawValue))
+			_, _ = fmt.Fprintf(w, "%s%s %s = %s\n", indent, s.MarkerRepeat(), key, s.Value(e.RawValue))
 		}
 		acc[e.Key] = e.RawValue
 	}
@@ -356,9 +356,9 @@ func renderServiceGaps(w io.Writer, r Report, service string, s Styler) {
 			continue // gap is in another service
 		}
 		// The whole gap line is red; the gapped var name is bold red within it.
-		fmt.Fprintf(w, "    %s\n", s.Gap(fmt.Sprintf("⚠ gap: %s — used as ${%s} in service %s (%s)",
+		_, _ = fmt.Fprintf(w, "    %s\n", s.Gap(fmt.Sprintf("⚠ gap: %s — used as ${%s} in service %s (%s)",
 			s.GapName(name), name, service, strings.Join(fields, ", "))))
-		fmt.Fprintf(w, "    %s\n", s.Gap(fmt.Sprintf("  but NOT in the Layer-1 chain → run falls back to %q.", fallback)))
+		_, _ = fmt.Fprintf(w, "    %s\n", s.Gap(fmt.Sprintf("  but NOT in the Layer-1 chain → run falls back to %q.", fallback)))
 	}
 }
 
@@ -383,9 +383,9 @@ func renderEffective(w io.Writer, r Report, service string, s Styler) {
 		if service != "" && se.Service != service {
 			continue
 		}
-		fmt.Fprintf(w, "service %s:\n", s.Service(se.Service))
+		_, _ = fmt.Fprintf(w, "service %s:\n", s.Service(se.Service))
 		for _, e := range se.Entries {
-			fmt.Fprintf(w, "  %s=%s\t<- %s (%s)\n",
+			_, _ = fmt.Fprintf(w, "  %s=%s\t<- %s (%s)\n",
 				s.Key(e.Key), s.Value(e.Value), s.Path(e.Source.File), s.SourceLabel(e.Source.Layer))
 		}
 	}

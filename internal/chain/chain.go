@@ -86,7 +86,7 @@ func parseDotEnv(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	out := map[string]string{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -173,7 +173,7 @@ func readChainTemplates(projectDir, chainName string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read .cenvkit.envchain: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Parse all sections so a miss can report the available names. The implicit
 	// [default] holds every line until the first header; sections never inherit.

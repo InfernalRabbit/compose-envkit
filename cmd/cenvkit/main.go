@@ -70,7 +70,7 @@ func newRootCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print the cenvkit version",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			fmt.Fprintln(cmd.OutOrStdout(), version)
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), version)
 			return nil
 		},
 	})
@@ -223,7 +223,7 @@ func newEnvFilesCmd() *cobra.Command {
 			}
 			s := currentStyler()
 			for _, f := range merged {
-				fmt.Fprintln(cmd.OutOrStdout(), s.Path(f)) // cyan on a TTY; plain when piped
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), s.Path(f)) // cyan on a TTY; plain when piped
 			}
 			return nil
 		},
@@ -342,7 +342,7 @@ func newValidateCmd() *cobra.Command {
 				if env != "" {
 					label = env + " config valid"
 				}
-				fmt.Fprintln(cmd.OutOrStdout(), s.Ok(label))
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), s.Ok(label))
 				return nil
 			}
 			if all {
@@ -678,7 +678,7 @@ func main() {
 		var ee *exitError
 		if errors.As(err, &ee) {
 			if ee.msg != "" {
-				fmt.Fprintln(os.Stderr, es.ErrorMsg("cenvkit: "+ee.msg))
+				_, _ = fmt.Fprintln(os.Stderr, es.ErrorMsg("cenvkit: "+ee.msg))
 			}
 			os.Exit(ee.code)
 		}
@@ -687,10 +687,10 @@ func main() {
 		// the error message (chain.UnknownChainError.Error()).
 		var uce *chain.UnknownChainError
 		if errors.As(err, &uce) {
-			fmt.Fprintln(os.Stderr, es.ErrorMsg("cenvkit: "+err.Error()))
+			_, _ = fmt.Fprintln(os.Stderr, es.ErrorMsg("cenvkit: "+err.Error()))
 			os.Exit(2)
 		}
-		fmt.Fprintln(os.Stderr, es.ErrorMsg("cenvkit: "+err.Error()))
+		_, _ = fmt.Fprintln(os.Stderr, es.ErrorMsg("cenvkit: "+err.Error()))
 		os.Exit(1)
 	}
 }

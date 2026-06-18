@@ -187,7 +187,7 @@ services:
 	}
 
 	// layer order: chain files (layer1) BEFORE service layers
-	var firstChainIdx, firstSvcIdx int = -1, -1
+	firstChainIdx, firstSvcIdx := -1, -1
 	for i, l := range rep.Layers {
 		if l.Layer == "layer1" && firstChainIdx == -1 {
 			firstChainIdx = i

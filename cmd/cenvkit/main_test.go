@@ -279,12 +279,12 @@ func TestEnvCmd_Dotenv_Default(t *testing.T) {
 	mustWriteFile(t, filepath.Join(dir, ".env"), "CHAIN_KEY=chain_val\n")
 	// Unset CHAIN_KEY from process env to avoid shell-wins masking
 	prev, had := os.LookupEnv("CHAIN_KEY")
-	os.Unsetenv("CHAIN_KEY")
+	_ = os.Unsetenv("CHAIN_KEY")
 	t.Cleanup(func() {
 		if had {
-			os.Setenv("CHAIN_KEY", prev)
+			_ = os.Setenv("CHAIN_KEY", prev)
 		} else {
-			os.Unsetenv("CHAIN_KEY")
+			_ = os.Unsetenv("CHAIN_KEY")
 		}
 	})
 
@@ -302,12 +302,12 @@ func TestEnvCmd_JSON_Format(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, ".env"), "JSON_KEY=jval\n")
 	prev, had := os.LookupEnv("JSON_KEY")
-	os.Unsetenv("JSON_KEY")
+	_ = os.Unsetenv("JSON_KEY")
 	t.Cleanup(func() {
 		if had {
-			os.Setenv("JSON_KEY", prev)
+			_ = os.Setenv("JSON_KEY", prev)
 		} else {
-			os.Unsetenv("JSON_KEY")
+			_ = os.Unsetenv("JSON_KEY")
 		}
 	})
 
@@ -328,12 +328,12 @@ func TestEnvCmd_Shell_Format(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, ".env"), "SHELL_KEY=sval\n")
 	prev, had := os.LookupEnv("SHELL_KEY")
-	os.Unsetenv("SHELL_KEY")
+	_ = os.Unsetenv("SHELL_KEY")
 	t.Cleanup(func() {
 		if had {
-			os.Setenv("SHELL_KEY", prev)
+			_ = os.Setenv("SHELL_KEY", prev)
 		} else {
-			os.Unsetenv("SHELL_KEY")
+			_ = os.Unsetenv("SHELL_KEY")
 		}
 	})
 
@@ -360,12 +360,12 @@ func TestEnvCmd_NoExpand_LiteralDollar(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, ".env"), "KEY=${SOME_VAR}\n")
 	prev, had := os.LookupEnv("KEY")
-	os.Unsetenv("KEY")
+	_ = os.Unsetenv("KEY")
 	t.Cleanup(func() {
 		if had {
-			os.Setenv("KEY", prev)
+			_ = os.Setenv("KEY", prev)
 		} else {
-			os.Unsetenv("KEY")
+			_ = os.Unsetenv("KEY")
 		}
 	})
 

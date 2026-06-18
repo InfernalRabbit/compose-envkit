@@ -13,7 +13,7 @@ Makefiles and no vendored wrapper scripts.
 
 ```
 examples/monorepo/
-├── docker-compose.yml         # root: include:s web/ + api/, adds the shared network
+├── docker-compose.yml         # root: include:s web/ api/ reports/ + a shared network (for the tools service)
 ├── docker-compose.dev.yml     # dev overlay  ┐ selected by COMPOSE_FILE's
 ├── docker-compose.prod.yml    # prod overlay ┘ ${CENVKIT_ENV} token
 ├── .cenvkit.envchain          # root Layer-1 chain (.env → .${ENV}.env → .${HOSTNAME}.env → .secrets.env)
@@ -131,7 +131,7 @@ cenvkit env-debug --trace --var WEB_PORT
 # WEB_PORT
 #   interpolation: NOT in the Layer-1 chain -> ${WEB_PORT} falls back at run time
 #   runtime:       …/web/.web.env -> WEB_PORT=18080  (service `web` container env only)
-#   ⚠ gap: ${WEB_PORT} used in service web environment[0] resolves to "WEB_PORT=0" at the run, NOT the env_file value (defined only in a service env_file).
+#   ⚠ gap: ${WEB_PORT} used in service web environment[1] resolves to "0" at the run, NOT the env_file value (defined only in a service env_file).
 #   ⚠ gap: ${WEB_PORT} used in service web ports[0] resolves to "0:80" at the run, NOT the env_file value (defined only in a service env_file).
 #   fix:   add WEB_PORT to the Layer-1 chain (e.g. .env), or use it runtime-only.
 

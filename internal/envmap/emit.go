@@ -50,12 +50,12 @@ func Emit(w io.Writer, r Resolved, f Format) error {
 				// target; refuse rather than emit something eval would mangle (MF8).
 				return fmt.Errorf("key %q is not a valid shell identifier; cannot emit --format shell", k)
 			}
-			fmt.Fprintf(w, "export %s=%s\n", k, shellQuote(r.Full[k]))
+			_, _ = fmt.Fprintf(w, "export %s=%s\n", k, shellQuote(r.Full[k]))
 		}
 		return nil
 	case FormatDotenv:
 		for _, k := range r.ChainKeys {
-			fmt.Fprintf(w, "%s=%s\n", k, dotenvQuote(r.Full[k]))
+			_, _ = fmt.Fprintf(w, "%s=%s\n", k, dotenvQuote(r.Full[k]))
 		}
 		return nil
 	default:

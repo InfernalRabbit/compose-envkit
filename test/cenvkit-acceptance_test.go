@@ -53,6 +53,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -72,7 +73,7 @@ func TestAssertionCountHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open self: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	var line2 string
 	for i := 0; sc.Scan(); i++ {
@@ -103,7 +104,7 @@ func TestMain(m *testing.M) {
 		panic("build cenvkit: " + err.Error())
 	}
 	code := m.Run()
-	os.RemoveAll(tmp)
+	_ = os.RemoveAll(tmp)
 	os.Exit(code)
 }
 
@@ -131,7 +132,23 @@ func runCenvkitSplit(t *testing.T, dir string, env []string, args ...string) (st
 	return outBuf.String(), errBuf.String(), err
 }
 
-func dockerAvailable() bool { return os.Getenv("SMOKE_SKIP_DOCKER") != "1" }
+var (
+	dockerOnce      sync.Once
+	dockerAvailOnce bool
+)
+
+// dockerAvailable returns false if SMOKE_SKIP_DOCKER=1 (fast short-circuit) or if
+// `docker compose version` fails (probes once per test binary via sync.Once).
+func dockerAvailable() bool {
+	if os.Getenv("SMOKE_SKIP_DOCKER") == "1" {
+		return false
+	}
+	dockerOnce.Do(func() {
+		err := exec.Command("docker", "compose", "version").Run()
+		dockerAvailOnce = err == nil
+	})
+	return dockerAvailOnce
+}
 
 // stageMonorepo copies examples/monorepo into a fresh temp dir and seeds Layer-1
 // dotfiles from example.* templates (mirrors smoke-monorepo.sh:102/119-121).
@@ -258,11 +275,15 @@ func TestScenario9_StrayFileNotDiscovered(t *testing.T) {
 	if err := os.MkdirAll(extraDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(extraDir, "docker-compose-extra.yml"), []byte(`
+	if err := os.WriteFile(filepath.Join(extraDir, "docker-compose-extra.yml"), []byte(`
 services:
   extra: { image: busybox, env_file: [./.extra.env] }
-`), 0o644)
-	os.WriteFile(filepath.Join(extraDir, ".extra.env"), []byte("EXTRA=1\n"), 0o644)
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extraDir, ".extra.env"), []byte("EXTRA=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, root, nil, "env-files")
 	if err != nil {
@@ -283,21 +304,33 @@ func TestScenario10_StrayNameNotDiscovered(t *testing.T) {
 
 	// 10.1: a stray compose.yaml NOT in include: — must NOT be discovered
 	strayDir := filepath.Join(root, "stray")
-	os.MkdirAll(strayDir, 0o755)
-	os.WriteFile(filepath.Join(strayDir, "compose.yaml"), []byte(`
+	if err := os.MkdirAll(strayDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(strayDir, "compose.yaml"), []byte(`
 services:
   stray: { image: busybox, env_file: [./.stray.env] }
-`), 0o644)
-	os.WriteFile(filepath.Join(strayDir, ".stray.env"), []byte("STRAY=1\n"), 0o644)
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(strayDir, ".stray.env"), []byte("STRAY=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// 10.2: stray docker-compose.yml NOT in include: — must NOT be discovered
 	weirdDir := filepath.Join(root, "weird")
-	os.MkdirAll(weirdDir, 0o755)
-	os.WriteFile(filepath.Join(weirdDir, "docker-compose.yml"), []byte(`
+	if err := os.MkdirAll(weirdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(weirdDir, "docker-compose.yml"), []byte(`
 services:
   weird: { image: busybox, env_file: [./.weird.env] }
-`), 0o644)
-	os.WriteFile(filepath.Join(weirdDir, ".weird.env"), []byte("WEIRD=1\n"), 0o644)
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(weirdDir, ".weird.env"), []byte("WEIRD=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, root, nil, "env-files")
 	if err != nil {
@@ -319,12 +352,18 @@ func TestScenario11_DepthIgnored(t *testing.T) {
 	root := stageMonorepo(t)
 	// Create a depth-4 compose file that is NOT in include:
 	deepDir := filepath.Join(root, "a", "b", "c")
-	os.MkdirAll(deepDir, 0o755)
-	os.WriteFile(filepath.Join(deepDir, "docker-compose.yml"), []byte(`
+	if err := os.MkdirAll(deepDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deepDir, "docker-compose.yml"), []byte(`
 services:
   deep: { image: busybox, env_file: [./.deep.env] }
-`), 0o644)
-	os.WriteFile(filepath.Join(deepDir, ".deep.env"), []byte("DEEP=1\n"), 0o644)
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deepDir, ".deep.env"), []byte("DEEP=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// COMPOSE_DEPTH=4 must NOT cause an error and must NOT find .deep.env
 	out, err := runCenvkit(t, root, []string{"COMPOSE_DEPTH=4"}, "env-files")
@@ -344,8 +383,12 @@ services:
 // 12.4 secrets file stays last
 func TestScenario12_HostOverrides(t *testing.T) {
 	root := stageMonorepo(t)
-	os.WriteFile(filepath.Join(root, ".testhost.env"), []byte("H=1\n"), 0o644)
-	os.WriteFile(filepath.Join(root, ".secrets.env"), []byte("S=1\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(root, ".testhost.env"), []byte("H=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".secrets.env"), []byte("S=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// 12.1 + 12.2 + 12.4: testhost discovered, order enforced
 	out, err := runCenvkit(t, root, []string{"HOSTNAME=testhost"}, "env-files")
@@ -384,12 +427,20 @@ func TestScenario12_HostOverrides(t *testing.T) {
 // 13.1 ${HOST} substitutes same as ${HOSTNAME}
 func TestScenario13_HostToken(t *testing.T) {
 	root := stageMonorepo(t)
-	os.WriteFile(filepath.Join(root, ".testhost.env"), []byte("H=1\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(root, ".testhost.env"), []byte("H=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// .cenvkit.envchain already uses ${HOSTNAME}; create a parallel chain using ${HOST}
 	hostDir := t.TempDir()
-	os.WriteFile(filepath.Join(hostDir, ".cenvkit.envchain"), []byte(".env\n.${HOST}.env\n"), 0o644)
-	os.WriteFile(filepath.Join(hostDir, ".env"), []byte("B=1\n"), 0o644)
-	os.WriteFile(filepath.Join(hostDir, ".testhost.env"), []byte("H=1\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(hostDir, ".cenvkit.envchain"), []byte(".env\n.${HOST}.env\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, ".env"), []byte("B=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostDir, ".testhost.env"), []byte("H=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, hostDir, []string{"HOSTNAME=testhost"}, "env-files")
 	if err != nil {
@@ -407,7 +458,9 @@ func TestScenario13_HostToken(t *testing.T) {
 // only Layer-1 chain files (does NOT error just because Layer-2 is empty).
 func TestScenario14_ChainOnlyNoCompose(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("VAR=1\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("VAR=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// no compose file in dir
 
 	out, err := runCenvkit(t, dir, nil, "env-files")
@@ -530,23 +583,37 @@ func TestScenario22_SubmoduleNotDiscovered(t *testing.T) {
 
 	// 22.1: .git gitlink subproject NOT discovered
 	vend1 := filepath.Join(root, "vendored")
-	os.MkdirAll(vend1, 0o755)
-	os.WriteFile(filepath.Join(vend1, "docker-compose.yml"), []byte(`
+	if err := os.MkdirAll(vend1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vend1, "docker-compose.yml"), []byte(`
 services:
   vend: { image: busybox, env_file: [./.vend.env] }
-`), 0o644)
-	os.WriteFile(filepath.Join(vend1, ".vend.env"), []byte("VEND=1\n"), 0o644)
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vend1, ".vend.env"), []byte("VEND=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// Simulate a gitlink (just a file named .git)
-	os.WriteFile(filepath.Join(vend1, ".git"), []byte("gitdir: ../../.git/modules/vendored\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(vend1, ".git"), []byte("gitdir: ../../.git/modules/vendored\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// 22.2: .git directory subproject NOT discovered
 	vend2 := filepath.Join(root, "vendored2")
-	os.MkdirAll(filepath.Join(vend2, ".git"), 0o755)
-	os.WriteFile(filepath.Join(vend2, "docker-compose.yml"), []byte(`
+	if err := os.MkdirAll(filepath.Join(vend2, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vend2, "docker-compose.yml"), []byte(`
 services:
   vend2: { image: busybox, env_file: [./.vend2.env] }
-`), 0o644)
-	os.WriteFile(filepath.Join(vend2, ".vend2.env"), []byte("VEND2=1\n"), 0o644)
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vend2, ".vend2.env"), []byte("VEND2=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, root, nil, "env-files")
 	if err != nil {
@@ -566,9 +633,15 @@ services:
 // 23.2 sanitized host resolves .evlhost.env
 func TestScenario23_HostSanitization(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.${HOSTNAME}.env\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("BASE=1\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, ".evlhost.env"), []byte("H=1\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.${HOSTNAME}.env\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("BASE=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".evlhost.env"), []byte("H=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, []string{"HOSTNAME=ev|l&host"}, "env-files")
 	if err != nil {
@@ -584,7 +657,9 @@ func TestScenario23_HostSanitization(t *testing.T) {
 // 5.6 --value --var SMOKE_VAL == the value set in Layer-1
 func TestEnvDebug_Value(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("SMOKE_VAL=hello-layer1\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SMOKE_VAL=hello-layer1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, nil, "env-debug", "--value", "--var", "SMOKE_VAL")
 	if err != nil {
@@ -598,7 +673,9 @@ func TestEnvDebug_Value(t *testing.T) {
 // 5.7 --value on unset var yields empty (no crash)
 func TestEnvDebug_ValueUnset(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, nil, "env-debug", "--value", "--var", "DEFINITELY_UNSET")
 	if err != nil {
@@ -640,7 +717,9 @@ func TestEnvDebug_Value_EnvFileOnly_Empty(t *testing.T) {
 // --list exit 0 + non-empty output (smoke.sh 5.1; flag renamed from --chain pre-C4)
 func TestEnvDebug_ListExitsZero(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, nil, "env-debug", "--list")
 	if err != nil {
@@ -654,7 +733,9 @@ func TestEnvDebug_ListExitsZero(t *testing.T) {
 // --files exit 0 + non-empty output (smoke.sh 5.4)
 func TestEnvDebug_FilesExitsZero(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, nil, "env-debug", "--files")
 	if err != nil {
@@ -691,7 +772,7 @@ func TestScenario_G5_InstallLayout(t *testing.T) {
 func TestC1_SinglePassLayerContract(t *testing.T) {
 	dir := t.TempDir()
 	// Service A's env_file defines ONLY_IN_A; service B's env_file path depends on it.
-	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
 services:
   svcA:
     image: busybox
@@ -702,10 +783,18 @@ services:
     env_file:
       - path: ./${ONLY_IN_A}/.b.env
         required: false
-`), 0o644)
-	os.WriteFile(filepath.Join(dir, "a.env"), []byte("ONLY_IN_A=sub\n"), 0o644)
-	os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
-	os.WriteFile(filepath.Join(dir, "sub", ".b.env"), []byte("B=1\n"), 0o644)
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.env"), []byte("ONLY_IN_A=sub\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", ".b.env"), []byte("B=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, nil, "env-files")
 	if err != nil {
@@ -733,14 +822,16 @@ func TestD1_RuntimeFatalMissingRequired(t *testing.T) {
 		t.Skip("SMOKE_SKIP_DOCKER=1")
 	}
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
 services:
   web:
     image: busybox
     env_file:
       - path: ./MISSING.env
         required: true
-`), 0o644)
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// MISSING.env intentionally absent.
 
 	_, err := runCenvkit(t, dir, nil, "compose", "config")
@@ -890,16 +981,24 @@ func TestW3_SecretsLastValueLevel(t *testing.T) {
 		t.Skip("SMOKE_SKIP_DOCKER=1")
 	}
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.secrets.env\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("API_TOKEN=base-val\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, ".secrets.env"), []byte("API_TOKEN=secret-real\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
+	if err := os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.secrets.env\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("API_TOKEN=base-val\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".secrets.env"), []byte("API_TOKEN=secret-real\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
 services:
   web:
     image: busybox
     environment:
       API_TOKEN: "${API_TOKEN}"
-`), 0o644)
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	out, err := runCenvkit(t, dir, nil, "compose", "config")
 	if err != nil {
 		t.Fatalf("[W3] compose config: %v\n%s", err, out)
@@ -1043,7 +1142,7 @@ func TestProvenance_GapValue_RenderOnlyStrip(t *testing.T) {
 	wp := rep.Vars["WEB_PORT"]
 	rawFound := false
 	for _, e := range wp.Effects {
-		if e.Field == "environment[0]" && e.Resolved == "WEB_PORT=0" {
+		if e.Field == "environment[1]" && e.Resolved == "WEB_PORT=0" {
 			rawFound = true
 		}
 	}
@@ -1059,9 +1158,15 @@ func TestProvenance_GapValue_RenderOnlyStrip(t *testing.T) {
 func TestEnvDebug_Overview_EmptyChainHint(t *testing.T) {
 	dir := t.TempDir()
 	// no .env and no .cenvkit.envchain → empty Layer-1 chain
-	os.MkdirAll(filepath.Join(dir, "web"), 0o755)
-	os.WriteFile(filepath.Join(dir, "web", ".web.env"), []byte("WEB_PORT=18080\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  web:\n    image: busybox\n    env_file: [web/.web.env]\n"), 0o644)
+	if err := os.MkdirAll(filepath.Join(dir, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "web", ".web.env"), []byte("WEB_PORT=18080\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  web:\n    image: busybox\n    env_file: [web/.web.env]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, nil, "env-debug", "--overview")
 	if err != nil {
@@ -1116,9 +1221,11 @@ func TestProvenance_Effective_Web_JSON(t *testing.T) {
 func TestProvenance_Effective_InlineEnvInterpolation(t *testing.T) {
 	dir := t.TempDir()
 	// svc.env defines X (env_file-only) and OVERRIDE_ME (beaten by inline env).
-	os.WriteFile(filepath.Join(dir, "svc.env"), []byte("X=envfileval\nOVERRIDE_ME=from-envfile\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "svc.env"), []byte("X=envfileval\nOVERRIDE_ME=from-envfile\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// compose: inline environment references ${X:-fallback} and overrides OVERRIDE_ME.
-	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
 services:
   svc:
     image: busybox
@@ -1128,7 +1235,9 @@ services:
     environment:
       FOO: "${X:-fallback}"
       OVERRIDE_ME: "from-env-inline"
-`), 0o644)
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, nil, "env-debug", "--effective", "--service", "svc", "--json")
 	if err != nil {
@@ -1203,9 +1312,15 @@ services:
 // (1 assertion)
 func TestProvenance_W3_SecretsLast_TraceWinner(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.secrets.env\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("API_TOKEN=base-val\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, ".secrets.env"), []byte("API_TOKEN=secret-real\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.secrets.env\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("API_TOKEN=base-val\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".secrets.env"), []byte("API_TOKEN=secret-real\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, nil, "env-debug", "--trace", "--var", "API_TOKEN")
 	if err != nil {
@@ -1221,7 +1336,9 @@ func TestProvenance_W3_SecretsLast_TraceWinner(t *testing.T) {
 // succeeds (exit 0), services absent/empty, var is attributed layer1. (2 assertions)
 func TestProvenance_ChainOnly_JSON(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("CHAIN_X=val42\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("CHAIN_X=val42\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// deliberately no compose file
 
 	out, err := runCenvkit(t, dir, nil, "env-debug", "--trace", "--var", "CHAIN_X", "--json")
@@ -1315,14 +1432,18 @@ func TestV3_Gap_JSON_Fields(t *testing.T) {
 // and a normal winner. (+1, RED on an over-eager gap impl)
 func TestV3_NoFalseGap_ChainVar(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("CHAIN_VAR=layer1-val\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("CHAIN_VAR=layer1-val\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
 services:
   web:
     image: busybox
     environment:
       CHAIN_VAR: "${CHAIN_VAR:-default}"
-`), 0o644)
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, nil, "env-debug", "--trace", "--var", "CHAIN_VAR", "--json")
 	if err != nil {
@@ -1356,11 +1477,17 @@ services:
 func TestOverview_ChainMarkers(t *testing.T) {
 	dir := t.TempDir()
 	// .cenvkit.envchain with two files
-	os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.dev.env\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.dev.env\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// .env: defines SITE_URL (will be overridden) and BASE_KEY (new, not overridden)
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\nBASE_KEY=base\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\nBASE_KEY=base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// .dev.env: overrides SITE_URL (~) and adds IS_DEV (+)
-	os.WriteFile(filepath.Join(dir, ".dev.env"), []byte("SITE_URL=dev.example.com\nIS_DEV=true\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".dev.env"), []byte("SITE_URL=dev.example.com\nIS_DEV=true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, nil, "env-debug", "--overview")
 	if err != nil {
@@ -1454,14 +1581,18 @@ func TestOverview_ChainOverrideOnMonorepo(t *testing.T) {
 // env_file:s is NOT flagged as a gap. (+1, RED on an over-eager gap impl)
 func TestV3_NoFalseGap_UnsetEverywhere(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("OTHER=val\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("OTHER=val\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
 services:
   web:
     image: busybox
     environment:
       TOTALLY_UNSET: "${TOTALLY_UNSET:-fallback}"
-`), 0o644)
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, nil, "env-debug", "--trace", "--var", "TOTALLY_UNSET", "--json")
 	if err != nil {
@@ -1516,9 +1647,13 @@ func TestValidate_Negative_InvalidCompose(t *testing.T) {
 		t.Skip("SMOKE_SKIP_DOCKER=1")
 	}
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// intentionally malformed YAML — flow sequence never closed
-	os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  web:\n    image: busybox\n  BADKEY: [broken\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  web:\n    image: busybox\n  BADKEY: [broken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	_, stderr, err := runCenvkitSplit(t, dir, nil, "validate")
 	// A-neg-1: must exit non-zero
@@ -1676,9 +1811,15 @@ func TestEnvDebug_Trace_REPORTS_PORT_DeepGap(t *testing.T) {
 // (.env, .dev.env, .secrets.env) present → env-files lists them in order. (3 assertions)
 func TestChain_DefaultFallback(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("BASE=1\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, ".dev.env"), []byte("TIER=1\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, ".secrets.env"), []byte("S=1\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("BASE=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".dev.env"), []byte("TIER=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".secrets.env"), []byte("S=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, []string{"CENVKIT_ENV=dev"}, "env-files")
 	if err != nil {
@@ -1704,9 +1845,15 @@ func TestChain_DefaultFallback(t *testing.T) {
 // lists only those two; .missing.env absent; exits 0. (3 assertions)
 func TestChain_MissingFileSkipped(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.missing.env\n.secrets.env\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, ".secrets.env"), []byte("S=1\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.missing.env\n.secrets.env\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".secrets.env"), []byte("S=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// .missing.env intentionally NOT created
 
 	out, err := runCenvkit(t, dir, nil, "env-files")
@@ -1739,9 +1886,15 @@ func TestChain_MissingFileSkipped(t *testing.T) {
 // includes abs path ending ".test.env". (1 assertion)
 func TestChain_ComposeEnvToken(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.${CENVKIT_ENV}.env\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, ".test.env"), []byte("T=1\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.${CENVKIT_ENV}.env\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".test.env"), []byte("T=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, []string{"CENVKIT_ENV=test"}, "env-files")
 	if err != nil {
@@ -1758,7 +1911,9 @@ func TestChain_ComposeEnvToken(t *testing.T) {
 // --value --var Q1 == "hello world"; --value --var Q2 == "x y". (2 assertions)
 func TestChain_QuotedCommentBlankParsing(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("Q1=\"hello world\"\nQ2='x y'\n# comment\n\nOTHER=val\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("Q1=\"hello world\"\nQ2='x y'\n# comment\n\nOTHER=val\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// D4-1: Q1 strips double-quotes → hello world
 	out1, err := runCenvkit(t, dir, nil, "env-debug", "--value", "--var", "Q1")
@@ -1783,9 +1938,13 @@ func TestChain_QuotedCommentBlankParsing(t *testing.T) {
 // Uses runCenvkitSplit to separate stdout/stderr. (2 assertions)
 func TestEnvDebug_Files_ComposeLoadError(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// malformed: flow sequence never closed → parse error from compose-go
-	os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  web:\n    image: busybox\n  BADKEY: [broken\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  web:\n    image: busybox\n  BADKEY: [broken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	_, stderr, err := runCenvkitSplit(t, dir, nil, "env-debug", "--files")
 	// E-1: exit non-zero
@@ -1836,14 +1995,20 @@ func envWithout(keys ...string) []string {
 func writeGapAcceptFixture(t *testing.T, inChain bool) string {
 	t.Helper()
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "compose.yaml"),
-		[]byte("services:\n  web:\n    image: nginx\n    env_file:\n      - web.env\n    ports:\n      - \"${WEB_PORT:-0}:80\"\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "web.env"), []byte("WEB_PORT=8080\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"),
+		[]byte("services:\n  web:\n    image: nginx\n    env_file:\n      - web.env\n    ports:\n      - \"${WEB_PORT:-0}:80\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "web.env"), []byte("WEB_PORT=8080\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	env := ""
 	if inChain {
 		env = "WEB_PORT=8080\n"
 	}
-	os.WriteFile(filepath.Join(dir, ".env"), []byte(env), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(env), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	return dir
 }
 
@@ -1896,7 +2061,9 @@ func TestGapReport_ExitCodeContract(t *testing.T) {
 
 	// C1-gap3: no compose file → exit 2 (misconfiguration)
 	noComposeDir := t.TempDir()
-	os.WriteFile(filepath.Join(noComposeDir, ".env"), []byte("FOO=bar\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(noComposeDir, ".env"), []byte("FOO=bar\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	_, err3 := func() (string, error) {
 		c := exec.Command(cenvkitBin, "gap-report", "--project-dir", noComposeDir)
 		c.Env = cleanEnv
@@ -1937,7 +2104,9 @@ func TestGapReport_ExitCodeContract(t *testing.T) {
 // [C2-env-5] cenvkit env --no-expand emits literal ${VAR} unchanged. (1 assertion)
 func TestEnv_DaemonFree(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("ENV_CHAIN_KEY=chain_val\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("ENV_CHAIN_KEY=chain_val\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cleanEnv := envWithout("ENV_CHAIN_KEY", "COMPOSE_FILE", "COMPOSE_ENV_FILES")
 
 	// C2-env-1: dotenv default — chain key present, exit 0
@@ -2001,7 +2170,9 @@ func TestEnv_DaemonFree(t *testing.T) {
 
 	// C2-env-5: --no-expand leaves ${VAR} literal
 	noExpDir := t.TempDir()
-	os.WriteFile(filepath.Join(noExpDir, ".env"), []byte("LITERAL_KEY=${UNEXPANDED}\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(noExpDir, ".env"), []byte("LITERAL_KEY=${UNEXPANDED}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	out5, err5 := func() (string, error) {
 		c := exec.Command(cenvkitBin, "env", "--project-dir", noExpDir, "--no-expand")
 		c.Env = envWithout("LITERAL_KEY", "UNEXPANDED")
@@ -2021,7 +2192,9 @@ func TestEnv_DaemonFree(t *testing.T) {
 // [C2-run-3] cenvkit run --print exits 0 and emits chain env (no exec). (1 assertion)
 func TestRun_DaemonFree(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("RUN_CHAIN_KEY=run_val\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("RUN_CHAIN_KEY=run_val\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cleanEnv := envWithout("RUN_CHAIN_KEY", "COMPOSE_FILE", "COMPOSE_ENV_FILES")
 
 	// C2-run-1: `run -- echo hello` exits 0 (child exits 0)
@@ -2376,7 +2549,9 @@ func TestC4_API_Chain_DifferentList(t *testing.T) {
 // acceptance assertions above — they all run in non-TTY environments.
 func TestColor_NoLeak_DefaultNonTTY(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Run WITHOUT --color flag (auto) and WITHOUT NO_COLOR/CLICOLOR_FORCE set.
 	// In a non-TTY test runner, auto resolves to plain.
@@ -2393,7 +2568,9 @@ func TestColor_NoLeak_DefaultNonTTY(t *testing.T) {
 // of --color=always (JSON is machine output; top rule in §5).
 func TestColor_NoLeak_JSON(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, nil, "env-debug", "--list", "--json", "--color=always")
 	if err != nil {
@@ -2408,7 +2585,9 @@ func TestColor_NoLeak_JSON(t *testing.T) {
 // might be present.
 func TestColor_NoLeak_NeverFlag(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, nil, "env-debug", "--list", "--color=never")
 	if err != nil {
@@ -2422,7 +2601,9 @@ func TestColor_NoLeak_NeverFlag(t *testing.T) {
 // TestColor_NoLeak_NOCOLOR: NO_COLOR=1 env var disables ANSI output.
 func TestColor_NoLeak_NOCOLOR(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, []string{"NO_COLOR=1"}, "env-debug", "--list")
 	if err != nil {
@@ -2439,9 +2620,15 @@ func TestColor_NoLeak_NOCOLOR(t *testing.T) {
 // Uses a scratch fixture (not stageMonorepo) for speed.
 func TestColor_AlwaysFlag_OverviewHasANSI(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.dev.env\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, ".dev.env"), []byte("IS_DEV=true\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.dev.env\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".dev.env"), []byte("IS_DEV=true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := runCenvkit(t, dir, nil, "env-debug", "--overview", "--color=always")
 	if err != nil {

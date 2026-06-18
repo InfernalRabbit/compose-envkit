@@ -191,8 +191,8 @@ func TestDisabled_MarkerGlyphsNonEmpty(t *testing.T) {
 // TestResolve_InterfaceSatisfied: compile guard — Resolve and Disabled must
 // return provenance.Styler. A compile error here means the API contract broke.
 func TestResolve_InterfaceSatisfied(t *testing.T) {
-	var _ provenance.Styler = style.Resolve("never", os.Stdout)
-	var _ provenance.Styler = style.Disabled()
+	_ = style.Resolve("never", os.Stdout)
+	_ = style.Disabled()
 	t.Log("style.Resolve and style.Disabled satisfy provenance.Styler — compile guard OK")
 }
 

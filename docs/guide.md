@@ -416,7 +416,7 @@ $ cenvkit env-debug --trace --var WEB_PORT
 WEB_PORT
   interpolation: NOT in the Layer-1 chain -> ${WEB_PORT} falls back at run time
   runtime:       /app/web/.web.env -> WEB_PORT=18080  (service `web` container env only)
-  ⚠ gap: ${WEB_PORT} used in service web environment[0] resolves to "WEB_PORT=0" at the run, NOT the env_file value (defined only in a service env_file).
+  ⚠ gap: ${WEB_PORT} used in service web environment[1] resolves to "0" at the run, NOT the env_file value (defined only in a service env_file).
   ⚠ gap: ${WEB_PORT} used in service web ports[0] resolves to "0:80" at the run, NOT the env_file value (defined only in a service env_file).
   fix:   add WEB_PORT to the Layer-1 chain (e.g. .env), or use it runtime-only.
 ```
@@ -460,7 +460,7 @@ Runtime-only — service env_file: (NOT interpolated)
         + WEB_DEBUG = true
     inline environment:
         ~ WEB_PORT = 18080 → 0
-    ⚠ gap: WEB_PORT — used as ${WEB_PORT} in service web (environment[0], ports[0])
+    ⚠ gap: WEB_PORT — used as ${WEB_PORT} in service web (environment[1], ports[0])
       but NOT in the Layer-1 chain → run falls back.
 ```
 
