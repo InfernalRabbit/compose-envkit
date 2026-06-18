@@ -1,5 +1,5 @@
 // Package acceptance ports the smoke-monorepo.sh and smoke.sh suites to drive the
-// cenvkit binary directly. Current assertion count: 128.
+// cenvkit binary directly. Current assertion count: 137.
 //
 // Invocation map (replaces all ./docker / run_shim calls):
 //
@@ -35,11 +35,13 @@
 //	+3  #12: gap-value render-only strip guard + empty-chain hint acceptance
 //	+4  C1: gap-report exit-code contract (exit 1/0/2 + --json shape)
 //	+13 C2: cenvkit env/run daemon-free + MF4 parity (docker-gated)
+//	+8  C4: named-chain selector (env-files/env/run/compose/env-debug --list)
+//	+1  C4: [api] chain multi-section isolation vs [ci]
 //	────
-//	128 total
+//	137 total
 //
 // Note: TestC1_SinglePassLayerContract and TestD1_RuntimeFatalMissingRequired use
-// throwaway fixtures and guard contract seams — they are included in the 128 count.
+// throwaway fixtures and guard contract seams — they are included in the 137 count.
 package acceptance
 
 import (
@@ -60,7 +62,7 @@ import (
 // The file-header comment (line 2) is kept in sync by TestAssertionCountHeader
 // below — if you bump one, the test forces you to bump the other.
 // This replaces the recurring manual "133 total" / "131 count" drift class.
-const declaredAssertions = 128
+const declaredAssertions = 137
 
 // TestAssertionCountHeader verifies that the file-header "Current assertion count: N"
 // comment on line 2 matches the declaredAssertions const above.
@@ -147,6 +149,8 @@ func stageMonorepo(t *testing.T) string {
 		{"example.env", ".env"},
 		{"example.dev.env", ".dev.env"},
 		{"example.prod.env", ".prod.env"},
+		{"example.ci.env", ".ci.env"},               // C4 [ci] named-chain fixture
+		{"example.api-chain.env", ".api-chain.env"}, // C4 [api] named-chain fixture
 	} {
 		b, err := os.ReadFile(filepath.Join(dst, p[0]))
 		if err != nil {
@@ -355,10 +359,10 @@ func TestScenario12_HostOverrides(t *testing.T) {
 	if !assertBefore(lines, "/.env", ".testhost.env") {
 		t.Fatalf("[12.2] .env must appear before .testhost.env:\n%s", out)
 	}
-	// 12.4: secrets last WITHIN LAYER-1 — use --chain which shows Layer-1 only.
-	chainOut, err := runCenvkit(t, root, []string{"HOSTNAME=testhost"}, "env-debug", "--chain")
+	// 12.4: secrets last WITHIN LAYER-1 — use --list which shows Layer-1 only.
+	chainOut, err := runCenvkit(t, root, []string{"HOSTNAME=testhost"}, "env-debug", "--list")
 	if err != nil {
-		t.Fatalf("[12.4] env-debug --chain: %v\n%s", err, chainOut)
+		t.Fatalf("[12.4] env-debug --list: %v\n%s", err, chainOut)
 	}
 	chainLines := nonEmpty(strings.Split(chainOut, "\n"))
 	if len(chainLines) == 0 || !strings.HasSuffix(strings.TrimSpace(chainLines[len(chainLines)-1]), ".secrets.env") {
@@ -575,7 +579,7 @@ func TestScenario23_HostSanitization(t *testing.T) {
 	}
 }
 
-// ─── env-debug: --value and --chain (smoke.sh 5.6/5.7, no docker) ────────────
+// ─── env-debug: --value and --list (smoke.sh 5.6/5.7, no docker) ────────────
 
 // 5.6 --value --var SMOKE_VAL == the value set in Layer-1
 func TestEnvDebug_Value(t *testing.T) {
@@ -633,17 +637,17 @@ func TestEnvDebug_Value_EnvFileOnly_Empty(t *testing.T) {
 	}
 }
 
-// --chain exit 0 + non-empty output (smoke.sh 5.1)
-func TestEnvDebug_ChainExitsZero(t *testing.T) {
+// --list exit 0 + non-empty output (smoke.sh 5.1; flag renamed from --chain pre-C4)
+func TestEnvDebug_ListExitsZero(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644)
 
-	out, err := runCenvkit(t, dir, nil, "env-debug", "--chain")
+	out, err := runCenvkit(t, dir, nil, "env-debug", "--list")
 	if err != nil {
-		t.Fatalf("[5.1] env-debug --chain: %v\n%s", err, out)
+		t.Fatalf("[5.1] env-debug --list: %v\n%s", err, out)
 	}
 	if strings.TrimSpace(out) == "" {
-		t.Fatalf("[5.1] --chain output must be non-empty")
+		t.Fatalf("[5.1] --list output must be non-empty")
 	}
 }
 
@@ -2145,6 +2149,221 @@ func TestParity_MF4_EnvEqualsEnvDebugEqualsCompose(t *testing.T) {
 
 // ─── end C2: cenvkit env / run acceptance ────────────────────────────────────
 
+// ─── C4: named-chain acceptance ──────────────────────────────────────────────
+//
+// Fixture: stageMonorepo (.cenvkit.envchain has a [ci] section with only
+// .env + .ci.env; the [default] section has .env + .${ENV}.env + .${HOSTNAME}.env
+// + .secrets.env). .ci.env is a tracked file (CI=true, IS_DEV=false).
+//
+// Assertions (8 total):
+//   C4-1:  env-files with --chain ci lists .env and .ci.env (not .dev.env)
+//   C4-2:  env-files without --chain lists the default chain (.dev.env present)
+//   C4-3:  env --chain ci emits CI=true (from .ci.env) but not IS_DEV=true (default-only)
+//   C4-4:  run --chain ci -- printenv CI returns "true"
+//   C4-5:  --chain unknown exits 2 and stderr lists available section names
+//   C4-6:  env-debug --list (renamed from --chain pre-C4) still works as the
+//          bare Layer-1 view with no --chain named selector (regression guard)
+//   C4-7:  --chain ci with env-debug --list shows .ci.env (named chain + list view)
+//   C4-8:  compose --chain ci config does not fail with "unknown flag" (strip guard)
+
+// TestC4_EnvFiles_NamedChain_DifferentList (C4-1 + C4-2, no docker):
+// --chain ci selects the [ci] section → only .env and .ci.env. Without --chain
+// the default section is used → .dev.env is present. The two lists must differ.
+// RED if [ci] returns .dev.env, or if default returns .ci.env as the ONLY file.
+func TestC4_EnvFiles_NamedChain_DifferentList(t *testing.T) {
+	root := stageMonorepo(t)
+	cleanEnv := envWithout("CENVKIT_ENV", "COMPOSE_FILE", "COMPOSE_ENV_FILES")
+
+	// C4-1: --chain ci env-files
+	outCI, err := runCenvkit(t, root, cleanEnv, "--chain", "ci", "env-files")
+	if err != nil {
+		t.Fatalf("[C4-1] env-files --chain ci: %v\n%s", err, outCI)
+	}
+	if !strings.Contains(outCI, ".ci.env") {
+		t.Fatalf("[C4-1] --chain ci must include .ci.env; got:\n%s", outCI)
+	}
+	if strings.Contains(outCI, ".dev.env") {
+		t.Fatalf("[C4-1] --chain ci must NOT include .dev.env (standalone, no inheritance); got:\n%s", outCI)
+	}
+
+	// C4-2: default (no --chain) env-files → .dev.env present, .ci.env absent
+	outDef, err := runCenvkit(t, root, cleanEnv, "env-files")
+	if err != nil {
+		t.Fatalf("[C4-2] env-files (default): %v\n%s", err, outDef)
+	}
+	if !strings.Contains(outDef, ".dev.env") {
+		t.Fatalf("[C4-2] default chain must include .dev.env; got:\n%s", outDef)
+	}
+	if strings.Contains(outDef, ".ci.env") {
+		t.Fatalf("[C4-2] default chain must NOT include .ci.env; got:\n%s", outDef)
+	}
+}
+
+// TestC4_Env_NamedChain_CIVar (C4-3, no docker):
+// cenvkit env --chain ci must include CI=true (from .ci.env) and the key
+// IS_DEV must equal "false" (set in .ci.env, not the default-chain "true").
+// RED if CI is absent or IS_DEV="true" (which would mean .dev.env leaked in).
+func TestC4_Env_NamedChain_CIVar(t *testing.T) {
+	root := stageMonorepo(t)
+	cleanEnv := envWithout("CENVKIT_ENV", "CI", "IS_DEV", "COMPOSE_ENV_FILES")
+
+	out, err := runCenvkit(t, root, cleanEnv, "--chain", "ci", "env")
+	if err != nil {
+		t.Fatalf("[C4-3] env --chain ci: %v\n%s", err, out)
+	}
+	// cenvkit env wraps values in double-quotes (dotenv format).
+	if !strings.Contains(out, `CI="true"`) {
+		t.Fatalf("[C4-3] expected CI=\"true\" in --chain ci env output; got:\n%s", out)
+	}
+	// .ci.env sets IS_DEV=false; [default] .dev.env would set IS_DEV=true
+	if strings.Contains(out, `IS_DEV="true"`) {
+		t.Fatalf("[C4-3] IS_DEV=\"true\" means .dev.env leaked into [ci] chain (no inheritance); got:\n%s", out)
+	}
+}
+
+// TestC4_Run_NamedChain (C4-4, no docker):
+// cenvkit run --chain ci -- printenv CI must print "true" (from .ci.env in [ci]).
+// RED if printenv exits non-zero or CI is absent/"" in the chain.
+func TestC4_Run_NamedChain(t *testing.T) {
+	root := stageMonorepo(t)
+	cleanEnv := envWithout("CENVKIT_ENV", "CI", "COMPOSE_ENV_FILES")
+
+	out, err := runCenvkit(t, root, cleanEnv, "--chain", "ci", "run", "--", "printenv", "CI")
+	if err != nil {
+		t.Fatalf("[C4-4] run --chain ci -- printenv CI: %v\n%s", err, out)
+	}
+	if strings.TrimSpace(out) != "true" {
+		t.Fatalf("[C4-4] expected CI=true via --chain ci; got %q", strings.TrimSpace(out))
+	}
+}
+
+// TestC4_UnknownChain_Exit2 (C4-5, no docker):
+// Requesting a chain section that does not exist must exit 2 and the stderr
+// message must list the available section names. RED if exit code != 2 or if
+// the available name ("ci") is absent from stderr.
+func TestC4_UnknownChain_Exit2(t *testing.T) {
+	root := stageMonorepo(t)
+	cleanEnv := envWithout("CENVKIT_ENV", "COMPOSE_ENV_FILES")
+
+	_, stderr, err := runCenvkitSplit(t, root, cleanEnv, "--chain", "nosuchchain", "env-files")
+	code := gapExitCode(err)
+	if code != 2 {
+		t.Fatalf("[C4-5] unknown --chain must exit 2; got %d\nstderr: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "nosuchchain") {
+		t.Fatalf("[C4-5] stderr must name the requested chain %q; got:\n%s", "nosuchchain", stderr)
+	}
+	if !strings.Contains(stderr, "ci") {
+		t.Fatalf("[C4-5] stderr must list available chains (e.g. \"ci\"); got:\n%s", stderr)
+	}
+}
+
+// TestC4_EnvDebug_List_IsDefaultView (C4-6, no docker):
+// env-debug --list (renamed from --chain pre-C4) without a --chain selector
+// shows the default Layer-1 chain file list. This is the flag-rename regression
+// guard: if the rename broke anything, env-debug --list would error or produce
+// empty output.
+func TestC4_EnvDebug_List_IsDefaultView(t *testing.T) {
+	root := stageMonorepo(t)
+	cleanEnv := envWithout("CENVKIT_ENV", "COMPOSE_ENV_FILES")
+
+	out, err := runCenvkit(t, root, cleanEnv, "env-debug", "--list")
+	if err != nil {
+		t.Fatalf("[C4-6] env-debug --list (default view): %v\n%s", err, out)
+	}
+	if strings.TrimSpace(out) == "" {
+		t.Fatalf("[C4-6] env-debug --list must produce non-empty output (default chain)")
+	}
+	// Default chain includes .env and .dev.env; .ci.env must NOT appear (no --chain ci).
+	if strings.Contains(out, ".ci.env") {
+		t.Fatalf("[C4-6] env-debug --list without --chain must not show .ci.env; got:\n%s", out)
+	}
+}
+
+// TestC4_EnvDebug_List_WithNamedChain (C4-7, no docker):
+// --chain ci + env-debug --list shows the [ci] chain file list (.ci.env present,
+// .dev.env absent). Confirms --chain selector and --list view compose correctly.
+func TestC4_EnvDebug_List_WithNamedChain(t *testing.T) {
+	root := stageMonorepo(t)
+	cleanEnv := envWithout("CENVKIT_ENV", "COMPOSE_ENV_FILES")
+
+	out, err := runCenvkit(t, root, cleanEnv, "--chain", "ci", "env-debug", "--list")
+	if err != nil {
+		t.Fatalf("[C4-7] --chain ci env-debug --list: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, ".ci.env") {
+		t.Fatalf("[C4-7] --chain ci --list must show .ci.env; got:\n%s", out)
+	}
+	if strings.Contains(out, ".dev.env") {
+		t.Fatalf("[C4-7] --chain ci --list must not show .dev.env; got:\n%s", out)
+	}
+}
+
+// TestC4_Compose_ChainNotLeaked (C4-8, docker-gated):
+// cenvkit compose --chain ci config must not fail with "unknown flag: --chain"
+// from docker compose. The --chain flag must be stripped before forwarding args
+// in BOTH `--chain ci` (space form) AND `--chain=ci` (= form).
+// RED if compose exits non-zero with a flag-related error.
+func TestC4_Compose_ChainNotLeaked(t *testing.T) {
+	if !dockerAvailable() {
+		t.Skip("SMOKE_SKIP_DOCKER=1")
+	}
+	root := stageMonorepo(t)
+	cleanEnv := envWithout("CENVKIT_ENV", "COMPOSE_FILE", "COMPOSE_ENV_FILES")
+
+	// C4-8a: `--chain ci` space form
+	out, err := runCenvkit(t, root, cleanEnv, "--chain", "ci", "compose", "config")
+	if err != nil {
+		if strings.Contains(out+err.Error(), "unknown flag") {
+			t.Fatalf("[C4-8a] --chain ci leaked to docker compose as unknown flag:\n%s", out)
+		}
+		t.Fatalf("[C4-8a] compose --chain ci config failed: %v\n%s", err, out)
+	}
+
+	// C4-8b: `--chain=ci` equals form — extractPersistentFlag must strip this too.
+	out2, err2 := runCenvkit(t, root, cleanEnv, "--chain=ci", "compose", "config")
+	if err2 != nil {
+		if strings.Contains(out2+err2.Error(), "unknown flag") {
+			t.Fatalf("[C4-8b] --chain=ci leaked to docker compose as unknown flag:\n%s", out2)
+		}
+		t.Fatalf("[C4-8b] compose --chain=ci config failed: %v\n%s", err2, out2)
+	}
+}
+
+// TestC4_API_Chain_DifferentList (C4-9, no docker):
+// --chain api selects the [api] section (.env + .${ENV}.env + .api-chain.env).
+// Compared to --chain ci (.env + .ci.env), the lists differ: [api] includes
+// .dev.env and .api-chain.env; [ci] includes .ci.env but NOT .api-chain.env.
+// This also exercises the [default]/[api]/[web] multi-section fixture.
+// RED if [api] and [ci] produce the same list, or if .api-chain.env is missing.
+func TestC4_API_Chain_DifferentList(t *testing.T) {
+	root := stageMonorepo(t)
+	cleanEnv := envWithout("CENVKIT_ENV", "COMPOSE_FILE", "COMPOSE_ENV_FILES")
+
+	// [api] chain: .env + .dev.env + .api-chain.env
+	outAPI, err := runCenvkit(t, root, cleanEnv, "--chain", "api", "env-files")
+	if err != nil {
+		t.Fatalf("[C4-9] env-files --chain api: %v\n%s", err, outAPI)
+	}
+	if !strings.Contains(outAPI, ".api-chain.env") {
+		t.Fatalf("[C4-9] --chain api must include .api-chain.env; got:\n%s", outAPI)
+	}
+	if strings.Contains(outAPI, ".ci.env") {
+		t.Fatalf("[C4-9] --chain api must NOT include .ci.env; got:\n%s", outAPI)
+	}
+
+	// [ci] chain must not contain .api-chain.env — cross-section isolation check.
+	outCI, err := runCenvkit(t, root, cleanEnv, "--chain", "ci", "env-files")
+	if err != nil {
+		t.Fatalf("[C4-9] env-files --chain ci: %v\n%s", err, outCI)
+	}
+	if strings.Contains(outCI, ".api-chain.env") {
+		t.Fatalf("[C4-9] --chain ci must NOT include .api-chain.env (section isolation); got:\n%s", outCI)
+	}
+}
+
+// ─── end C4: named-chain acceptance ──────────────────────────────────────────
+
 // ─── color / ANSI no-leak guards ─────────────────────────────────────────────
 //
 // The acceptance assertions above run non-TTY/CI, so their literal-string
@@ -2161,12 +2380,12 @@ func TestColor_NoLeak_DefaultNonTTY(t *testing.T) {
 
 	// Run WITHOUT --color flag (auto) and WITHOUT NO_COLOR/CLICOLOR_FORCE set.
 	// In a non-TTY test runner, auto resolves to plain.
-	out, err := runCenvkit(t, dir, nil, "env-debug", "--chain")
+	out, err := runCenvkit(t, dir, nil, "env-debug", "--list")
 	if err != nil {
-		t.Fatalf("[color-noleak-1] env-debug --chain: %v\n%s", err, out)
+		t.Fatalf("[color-noleak-1] env-debug --list: %v\n%s", err, out)
 	}
 	if strings.Contains(out, "\x1b") {
-		t.Fatalf("[color-noleak-1] auto mode (non-TTY) leaked ANSI into --chain output:\n%s", out)
+		t.Fatalf("[color-noleak-1] auto mode (non-TTY) leaked ANSI into --list output:\n%s", out)
 	}
 }
 
@@ -2176,9 +2395,9 @@ func TestColor_NoLeak_JSON(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644)
 
-	out, err := runCenvkit(t, dir, nil, "env-debug", "--chain", "--json", "--color=always")
+	out, err := runCenvkit(t, dir, nil, "env-debug", "--list", "--json", "--color=always")
 	if err != nil {
-		t.Fatalf("[color-noleak-2] env-debug --chain --json --color=always: %v\n%s", err, out)
+		t.Fatalf("[color-noleak-2] env-debug --list --json --color=always: %v\n%s", err, out)
 	}
 	if strings.Contains(out, "\x1b") {
 		t.Fatalf("[color-noleak-2] --json with --color=always leaked ANSI — JSON must always be plain:\n%s", out)
@@ -2191,9 +2410,9 @@ func TestColor_NoLeak_NeverFlag(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644)
 
-	out, err := runCenvkit(t, dir, nil, "env-debug", "--chain", "--color=never")
+	out, err := runCenvkit(t, dir, nil, "env-debug", "--list", "--color=never")
 	if err != nil {
-		t.Fatalf("[color-noleak-3] env-debug --chain --color=never: %v\n%s", err, out)
+		t.Fatalf("[color-noleak-3] env-debug --list --color=never: %v\n%s", err, out)
 	}
 	if strings.Contains(out, "\x1b") {
 		t.Fatalf("[color-noleak-3] --color=never leaked ANSI:\n%s", out)
@@ -2205,9 +2424,9 @@ func TestColor_NoLeak_NOCOLOR(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644)
 
-	out, err := runCenvkit(t, dir, []string{"NO_COLOR=1"}, "env-debug", "--chain")
+	out, err := runCenvkit(t, dir, []string{"NO_COLOR=1"}, "env-debug", "--list")
 	if err != nil {
-		t.Fatalf("[color-noleak-4] env-debug --chain NO_COLOR=1: %v\n%s", err, out)
+		t.Fatalf("[color-noleak-4] env-debug --list NO_COLOR=1: %v\n%s", err, out)
 	}
 	if strings.Contains(out, "\x1b") {
 		t.Fatalf("[color-noleak-4] NO_COLOR=1 leaked ANSI:\n%s", out)

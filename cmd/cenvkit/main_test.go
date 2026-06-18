@@ -587,6 +587,83 @@ func TestEnvCmd_NoExpand_LiteralDollarInOutput(t *testing.T) {
 	}
 }
 
+// TestExtractPersistentFlag: extractPersistentFlag strips --name VAL and --name=VAL
+// (in any position, last-wins for repeated flags) for arbitrary flag names.
+// Closes the no-docker gap on the compose --chain strip security contract:
+// the acceptance C4-8a/b tests are docker-gated; this one runs without docker.
+// Tests BOTH "chain" (the C4 named-chain selector) AND "project-dir" (existing seam).
+// RED if a form is not stripped, the wrong value is returned, or non-flag args are lost.
+func TestExtractPersistentFlag(t *testing.T) {
+	tests := []struct {
+		name     string
+		flagName string
+		args     []string
+		wantVal  string
+		wantArgs []string
+	}{
+		// --chain forms
+		{
+			name:     "chain space form mid-position",
+			flagName: "chain",
+			args:     []string{"compose", "--chain", "ci", "config"},
+			wantVal:  "ci",
+			wantArgs: []string{"compose", "config"},
+		},
+		{
+			name:     "chain equals form",
+			flagName: "chain",
+			args:     []string{"--chain=api", "compose", "config"},
+			wantVal:  "api",
+			wantArgs: []string{"compose", "config"},
+		},
+		{
+			name:     "chain last-wins on repeat",
+			flagName: "chain",
+			args:     []string{"--chain=ci", "--chain", "api", "config"},
+			wantVal:  "api",
+			wantArgs: []string{"config"},
+		},
+		{
+			name:     "chain absent",
+			flagName: "chain",
+			args:     []string{"compose", "config"},
+			wantVal:  "",
+			wantArgs: []string{"compose", "config"},
+		},
+		// --project-dir forms (existing seam — cross-check extractPersistentFlag directly)
+		{
+			name:     "project-dir space form",
+			flagName: "project-dir",
+			args:     []string{"--project-dir", "/foo", "config"},
+			wantVal:  "/foo",
+			wantArgs: []string{"config"},
+		},
+		{
+			name:     "project-dir equals form",
+			flagName: "project-dir",
+			args:     []string{"config", "--project-dir=/bar"},
+			wantVal:  "/bar",
+			wantArgs: []string{"config"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			val, got := extractPersistentFlag(tc.args, tc.flagName)
+			if val != tc.wantVal {
+				t.Fatalf("val=%q want %q", val, tc.wantVal)
+			}
+			if len(got) != len(tc.wantArgs) {
+				t.Fatalf("args=%v want %v", got, tc.wantArgs)
+			}
+			for i := range got {
+				if got[i] != tc.wantArgs[i] {
+					t.Fatalf("args[%d]=%q want %q", i, got[i], tc.wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
 // extractProjectDir strips --project-dir in both forms from a DisableFlagParsing
 // arg slice and returns the value + cleaned args.
 func TestExtractProjectDir(t *testing.T) {

@@ -17,6 +17,27 @@ type Input struct {
 	ProjectDir string                 // absolute project directory
 	OSEnv      []string               // os.Environ(); injected for testability
 	Hostname   func() (string, error) // injected; production passes os.Hostname
+	Chain      string                 // named chain to select (C4); "" or "default" = the [default]/header-less section
+}
+
+// defaultChainName is the implicit section: lines before any [name] header (and a
+// header-less file — i.e. the flat format) belong to it. An empty Input.Chain
+// resolves to it.
+const defaultChainName = "default"
+
+// UnknownChainError reports a requested --chain <name> that the chain file does
+// not define. It carries the available section names (sorted) so the CLI can list
+// them and exit 2.
+type UnknownChainError struct {
+	Name      string   // the requested chain name
+	Available []string // sorted section names actually present
+}
+
+func (e *UnknownChainError) Error() string {
+	if len(e.Available) == 0 {
+		return fmt.Sprintf("no chain named %q (this file defines no named chains; only %q is available)", e.Name, defaultChainName)
+	}
+	return fmt.Sprintf("no chain named %q (available: %s)", e.Name, strings.Join(e.Available, ", "))
 }
 
 // Result is the resolved Layer-1 view.
@@ -127,28 +148,87 @@ func substituteTokens(tmpl, composeEnv, host string) string {
 	return r.Replace(tmpl)
 }
 
-func readChainTemplates(projectDir string) ([]string, error) {
+// readChainTemplates returns the ordered template list for the named chain
+// (C4). chainName "" is treated as "default".
+//
+// Format (INI-style, additive over the flat format): lines before any `[name]`
+// header (or in a header-less file — the legacy flat format) belong to the
+// implicit `[default]` section. Each `[name]` header opens a COMPLETE, STANDALONE
+// ordered list — there is NO inheritance from [default] (spec §7b). Selecting an
+// absent section returns an *UnknownChainError listing the available names.
+//
+// When no .cenvkit.envchain file exists, only "default" resolves (to the built-in
+// defaultChain); any other requested name is unknown (no file ⇒ no sections).
+func readChainTemplates(projectDir, chainName string) ([]string, error) {
+	if chainName == "" {
+		chainName = defaultChainName
+	}
 	f, err := os.Open(filepath.Join(projectDir, ".cenvkit.envchain"))
 	if os.IsNotExist(err) {
-		return append([]string(nil), defaultChain...), nil
+		if chainName == defaultChainName {
+			return append([]string(nil), defaultChain...), nil
+		}
+		return nil, &UnknownChainError{Name: chainName} // no file ⇒ no named chains
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read .cenvkit.envchain: %w", err)
 	}
 	defer f.Close()
-	var tmpls []string
+
+	// Parse all sections so a miss can report the available names. The implicit
+	// [default] holds every line until the first header; sections never inherit.
+	sections := map[string][]string{}
+	order := []string{} // section names in file order, for stable error listing
+	cur := defaultChainName
+	ensure := func(name string) {
+		if _, ok := sections[name]; !ok {
+			sections[name] = nil
+			order = append(order, name)
+		}
+	}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		tmpls = append(tmpls, line)
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			cur = strings.TrimSpace(line[1 : len(line)-1])
+			ensure(cur)
+			continue
+		}
+		ensure(cur)
+		sections[cur] = append(sections[cur], line)
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("scan .cenvkit.envchain: %w", err)
 	}
+
+	tmpls, ok := sections[chainName]
+	if !ok {
+		// "default" is always selectable even if the file has zero [default] lines
+		// (e.g. a file that opens directly with [api]); an empty default chain is
+		// legitimate (all entries missing ⇒ no Layer-1, exit 0).
+		if chainName == defaultChainName {
+			return nil, nil
+		}
+		return nil, &UnknownChainError{Name: chainName, Available: availableChains(order)}
+	}
 	return tmpls, nil
+}
+
+// availableChains returns the named (non-default) sections, sorted, for an
+// UnknownChainError. The implicit "default" is omitted: it always resolves, so
+// listing it as an "available" alternative to a typo'd name is noise.
+func availableChains(order []string) []string {
+	out := make([]string, 0, len(order))
+	for _, n := range order {
+		if n != defaultChainName {
+			out = append(out, n)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Resolve computes the Layer-1 file list and the seed environment.
@@ -157,7 +237,7 @@ func Resolve(in Input) (Result, error) {
 	composeEnv, composeEnvSource := resolveComposeEnv(in, osEnv)
 	host := resolveHost(in, osEnv)
 
-	tmpls, err := readChainTemplates(in.ProjectDir)
+	tmpls, err := readChainTemplates(in.ProjectDir, in.Chain)
 	if err != nil {
 		return Result{}, err
 	}

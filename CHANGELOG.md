@@ -6,6 +6,17 @@ to [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+### Added — named chains: `--chain <name>` (C4)
+
+- `.cenvkit.envchain` may now carry optional INI-style `[name]` sections; **`--chain
+  <name>`** (a persistent flag on every command) selects one. Lines before any header
+  (or a header-less file) are the implicit **`[default]`** chain — fully back-compatible
+  with the flat format. Sections are standalone (no inheritance) and orthogonal to
+  `CENVKIT_ENV`. An unknown `--chain` exits **2** and lists the available names.
+- ⚠ **BREAKING (pre-1.0):** `env-debug`'s `--chain` *mode* flag (the Layer-1 chain-files
+  default view) is renamed to **`--list`**, freeing `--chain <name>` as the universal
+  named-chain selector. `env-debug --list` == bare `env-debug` (the view is unchanged).
+
 ### Added — `cenvkit gap-report` (C1) and `cenvkit run` / `cenvkit env` (C2)
 
 - **`cenvkit gap-report`** — a daemon-free CI/pre-build lint over the existing gap

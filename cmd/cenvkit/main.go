@@ -60,6 +60,12 @@ func newRootCmd() *cobra.Command {
 	}
 	root.PersistentFlags().String("project-dir", "", "project directory (default: current directory)")
 	root.PersistentFlags().String("color", "auto", "colorize output: auto|always|never")
+	// --chain selects a named [name] section from .cenvkit.envchain (C4). It is
+	// persistent (mirrors --project-dir) so every chain-reading subcommand inherits
+	// ONE definition via resolveChainName; "" / "default" = the implicit
+	// header-less/[default] section. Commands that never read the chain (version,
+	// init) inherit it harmlessly, exactly as they inherit --project-dir.
+	root.PersistentFlags().String("chain", "", "named chain section from .cenvkit.envchain (default: the header-less/[default] chain)")
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the cenvkit version",
@@ -109,6 +115,18 @@ func resolveProjectDir(cmd *cobra.Command) (string, error) {
 	return filepath.Abs(pd)
 }
 
+// resolveChainName reads the persistent --chain flag (C4 named-chain selector),
+// mirroring resolveProjectDir. cmd.Flag() searches local/inherited/persistent
+// sets without a merge, so it works for the root, any subcommand, and the compose
+// pre-scan override (which writes through to this same shared flag). "" means the
+// implicit header-less/[default] chain — chain.Resolve normalizes it.
+func resolveChainName(cmd *cobra.Command) string {
+	if f := cmd.Flag("chain"); f != nil {
+		return f.Value.String()
+	}
+	return ""
+}
+
 // assemble resolves the Layer-1 chain and returns the COMPOSE_ENV_FILES list and
 // the chain result. v3 (Layer-2 debug-only): the run path is Layer-1 ONLY — a
 // service `env_file:` is runtime-only (native per-container) and is deliberately
@@ -125,7 +143,7 @@ func assemble(cmd *cobra.Command, envOverlay ...string) ([]string, chain.Result,
 		return nil, chain.Result{}, err
 	}
 	osEnv := append(os.Environ(), envOverlay...)
-	cr, err := chain.Resolve(chain.Input{ProjectDir: dir, OSEnv: osEnv, Hostname: os.Hostname})
+	cr, err := chain.Resolve(chain.Input{ProjectDir: dir, OSEnv: osEnv, Hostname: os.Hostname, Chain: resolveChainName(cmd)})
 	if err != nil {
 		return nil, chain.Result{}, err
 	}
@@ -155,7 +173,7 @@ func resolvePopulator(cmd *cobra.Command, env string, expand bool) (envmap.Resol
 	if env != "" {
 		osEnv = append(osEnv, "CENVKIT_ENV="+env) // re-resolve the chain for this env; wins (last)
 	}
-	cr, err := chain.Resolve(chain.Input{ProjectDir: dir, OSEnv: osEnv, Hostname: os.Hostname})
+	cr, err := chain.Resolve(chain.Input{ProjectDir: dir, OSEnv: osEnv, Hostname: os.Hostname, Chain: resolveChainName(cmd)})
 	if err != nil {
 		return envmap.Resolved{}, err
 	}
@@ -218,15 +236,20 @@ func newComposeCmd() *cobra.Command {
 		Short:              "Assemble the chain and exec `docker compose`",
 		DisableFlagParsing: true, // pass everything through to docker compose
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// DisableFlagParsing means cobra does NOT parse the persistent
-			// --project-dir here; it leaks into args and `docker compose` would
-			// reject it as an unknown flag. Pre-scan args: extract its value to
-			// override the project dir, and STRIP every occurrence (both
-			// `--project-dir VAL` and `--project-dir=VAL`, in any position) so it
-			// is never forwarded to docker compose. (finding [5])
-			dirOverride, args := extractProjectDir(args)
+			// DisableFlagParsing means cobra does NOT parse cenvkit's own persistent
+			// flags here; they leak into args and `docker compose` would reject them
+			// as unknown. Pre-scan args: extract each cenvkit flag's value to override
+			// the shared persistent flag, and STRIP every occurrence (both `--flag VAL`
+			// and `--flag=VAL`, in any position) so it is never forwarded to docker
+			// compose. --project-dir is finding [5]; --chain is the C4 named-chain
+			// selector (it must reach chain.Resolve via the persistent flag, not docker).
+			dirOverride, args := extractPersistentFlag(args, "project-dir")
 			if dirOverride != "" {
 				_ = cmd.Flags().Set("project-dir", dirOverride)
+			}
+			chainOverride, args := extractPersistentFlag(args, "chain")
+			if chainOverride != "" {
+				_ = cmd.Flags().Set("chain", chainOverride)
 			}
 			merged, _, err := assemble(cmd)
 			if err != nil {
@@ -252,27 +275,37 @@ func newComposeCmd() *cobra.Command {
 	return c
 }
 
-// extractProjectDir pulls --project-dir out of a DisableFlagParsing arg slice,
-// supporting `--project-dir VAL` and `--project-dir=VAL` in any position, and
-// returns the value (last wins) plus args with all occurrences removed.
-func extractProjectDir(args []string) (string, []string) {
+// extractPersistentFlag pulls a `--<name>` valued flag out of a DisableFlagParsing
+// arg slice, supporting `--name VAL` and `--name=VAL` in any position, and returns
+// the value (last wins) plus args with all occurrences removed. Used by the
+// compose pass-through to strip cenvkit's own persistent flags (--project-dir,
+// --chain) before forwarding the rest to `docker compose`.
+func extractPersistentFlag(args []string, name string) (string, []string) {
+	long := "--" + name
+	eq := long + "="
 	val := ""
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "--project-dir":
+		case a == long:
 			if i+1 < len(args) {
 				val = args[i+1]
 				i++ // skip the value token
 			}
-		case strings.HasPrefix(a, "--project-dir="):
-			val = strings.TrimPrefix(a, "--project-dir=")
+		case strings.HasPrefix(a, eq):
+			val = strings.TrimPrefix(a, eq)
 		default:
 			out = append(out, a)
 		}
 	}
 	return val, out
+}
+
+// extractProjectDir is the --project-dir specialization of extractPersistentFlag,
+// retained as a named seam for the existing unit test.
+func extractProjectDir(args []string) (string, []string) {
+	return extractPersistentFlag(args, "project-dir")
 }
 
 func newValidateCmd() *cobra.Command {
@@ -341,8 +374,8 @@ func newInitCmd() *cobra.Command {
 
 func newEnvDebugCmd() *cobra.Command {
 	var (
-		mChain, mEffective, mFiles, mTrace, mValue, mOverview, jsonOut bool
-		varName, service                                               string
+		mList, mEffective, mFiles, mTrace, mValue, mOverview, jsonOut bool
+		varName, service                                              string
 	)
 	c := &cobra.Command{
 		Use:   "env-debug",
@@ -352,7 +385,7 @@ func newEnvDebugCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cr, err := chain.Resolve(chain.Input{ProjectDir: dir, OSEnv: os.Environ(), Hostname: os.Hostname})
+			cr, err := chain.Resolve(chain.Input{ProjectDir: dir, OSEnv: os.Environ(), Hostname: os.Hostname, Chain: resolveChainName(cmd)})
 			if err != nil {
 				return err
 			}
@@ -384,7 +417,7 @@ func newEnvDebugCmd() *cobra.Command {
 			}
 			provenance.RenderHuman(out, rep, provenance.HumanOpts{
 				Trace: pick(mTrace, varName), Value: pick(mValue, varName),
-				Effective: mEffective, Service: service, Chain: mChain, Files: mFiles,
+				Effective: mEffective, Service: service, Chain: mList, Files: mFiles,
 				Overview:         mOverview,
 				ComposeEnv:       cr.ComposeEnv,
 				ComposeEnvSource: cr.ComposeEnvSource,
@@ -394,7 +427,11 @@ func newEnvDebugCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().BoolVar(&mChain, "chain", false, "Layer-1 chain files (default view)")
+	// --list is this command's default view (the Layer-1 chain-file list). It was
+	// named --chain pre-C4; C4 reclaims the universal string selector `--chain
+	// <name>` (the persistent root flag) for picking a named [name] section, so the
+	// boolean mode was renamed --list to avoid a same-flag string/bool collision.
+	c.Flags().BoolVar(&mList, "list", false, "Layer-1 chain files (default view)")
 	c.Flags().BoolVar(&mEffective, "effective", false, "per-service env with sources")
 	c.Flags().BoolVar(&mFiles, "files", false, "interpolation set (COMPOSE_ENV_FILES) + runtime-only service env_file paths")
 	c.Flags().BoolVar(&mTrace, "trace", false, "trace --var: winner, overridden, effects")
@@ -430,7 +467,7 @@ func newGapReportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cr, err := chain.Resolve(chain.Input{ProjectDir: dir, OSEnv: os.Environ(), Hostname: os.Hostname})
+			cr, err := chain.Resolve(chain.Input{ProjectDir: dir, OSEnv: os.Environ(), Hostname: os.Hostname, Chain: resolveChainName(cmd)})
 			if err != nil {
 				return err
 			}
@@ -644,6 +681,14 @@ func main() {
 				fmt.Fprintln(os.Stderr, es.ErrorMsg("cenvkit: "+ee.msg))
 			}
 			os.Exit(ee.code)
+		}
+		// A --chain <name> that the chain file doesn't define is a usage error: exit 2
+		// (distinct from the generic exit 1), with the available chain names already in
+		// the error message (chain.UnknownChainError.Error()).
+		var uce *chain.UnknownChainError
+		if errors.As(err, &uce) {
+			fmt.Fprintln(os.Stderr, es.ErrorMsg("cenvkit: "+err.Error()))
+			os.Exit(2)
 		}
 		fmt.Fprintln(os.Stderr, es.ErrorMsg("cenvkit: "+err.Error()))
 		os.Exit(1)

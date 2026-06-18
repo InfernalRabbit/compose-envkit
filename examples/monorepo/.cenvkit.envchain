@@ -27,3 +27,26 @@
 # Per-subproject secrets belong in each subproject's own gitignored env file
 # (e.g. web/.web.secrets.env) — listed there via service env_file: (runtime-only).
 .secrets.env
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Named chains (C4): each section is STANDALONE — no inheritance from [default].
+# Select with: cenvkit --chain <name> <subcommand>
+
+# [ci] — minimal CI chain: only the committed base + a CI-specific overlay.
+# Secret-store-backed CI does not need the hostname override or a local
+# .secrets.env, so they are intentionally omitted to keep the chain hermetic.
+[ci]
+.env
+.ci.env
+
+# [api] — API-service focused chain: base + env-specific overlay + API overlay.
+# Demonstrates a service-scoped named chain alongside the project default.
+[api]
+.env
+.${ENV}.env
+.api-chain.env
+
+# [web] — web-service focused chain: base + env tier only; no hostname/secrets.
+[web]
+.env
+.${CENVKIT_ENV}.env
