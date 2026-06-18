@@ -42,16 +42,18 @@ func parseDotEnv(path string, lookup dotenv.LookupFn) (map[string]string, error)
 	return dotenv.ReadFile(path, lookup)
 }
 
-// parseOrderedLiteral reads a dotenv-style file into ORDERED, LITERAL entries for
-// the --overview lens. compose-go's dotenv parser cannot be reused here: it returns
-// an unordered map AND expands ${...} (verified v2.11.0, plan §0). This is a thin
-// stdlib-only line reader (keeps the engine seam — no extra compose-go surface). It
-// mirrors dotenv's KEY tokenization (skip blank/#-comment lines; strip a leading
-// `export `; split on the first `=`; key charset [A-Za-z0-9_.-]) but takes the
-// VALUE verbatim — NO ${...} expansion and NO escape processing — except it strips
-// one matching surrounding quote pair, and for an UNQUOTED value trims a trailing
-// " # comment" + trailing space (mirrors dotenv parser.go:157-159; decision D-B).
-func parseOrderedLiteral(path string) ([]provenance.OverviewEntry, error) {
+// ParseOrderedLiteral reads a dotenv-style file into ORDERED, LITERAL entries for
+// the --overview lens AND the populator's --no-expand path (internal/envmap folds
+// the ordered entries into a last-wins map). compose-go's dotenv parser cannot be
+// reused here: it returns an unordered map AND expands ${...} (verified v2.11.0,
+// plan §0). This is a thin stdlib-only line reader (keeps the engine seam — no
+// extra compose-go surface). It mirrors dotenv's KEY tokenization (skip
+// blank/#-comment lines; strip a leading `export `; split on the first `=`; key
+// charset [A-Za-z0-9_.-]) but takes the VALUE verbatim — NO ${...} expansion and NO
+// escape processing — except it strips one matching surrounding quote pair, and for
+// an UNQUOTED value trims a trailing " # comment" + trailing space (mirrors dotenv
+// parser.go:157-159; decision D-B).
+func ParseOrderedLiteral(path string) ([]provenance.OverviewEntry, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -155,11 +157,24 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 	//             resolves to its :-default fallback, exactly like the live
 	//             `docker compose` run (#3435: env_file is not interpolated).
 	// We capture each file's parsed map once and REUSE it for A-attribution below.
+	//
+	// U1 (spec §5c, MF4): interpEnv is built via engine.Flatten (= dotenv.
+	// GetEnvFromFile) so env-debug and the populator (cenvkit run/env) share ONE
+	// expansion primitive — the same chain yields IDENTICAL ${VAR} values across
+	// commands. Flatten exposes the full shell base to every file immediately
+	// (compose parity), unlike the incremental chainEnv lookup below whose shell
+	// overlay lands only AFTER the file loop. chainEnv stays incremental on purpose:
+	// its ONLY role is the dotenv lookup, which is not parity-critical (the two-env
+	// split is preserved — do NOT collapse them).
+	shellMap := envSliceToMap(in.Env)
 	chainEnv := map[string]string{}
-	interpEnv := map[string]string{}
 	parsed := make([]map[string]string, len(in.EnvFiles)) // parsed[i] aligns with in.EnvFiles[i]
 	lookup := dotenv.LookupFn(func(k string) (string, bool) { v, ok := chainEnv[k]; return v, ok })
+	var layer1Files []string
 	for i, f := range in.EnvFiles {
+		if f.Layer == "layer1" {
+			layer1Files = append(layer1Files, f.Path)
+		}
 		// First pass without a full lookup (lookup is built incrementally); refs
 		// that resolve later still win via the overlay. Practical chains rarely
 		// depend on cross-file ${VAR} inside an env_file; the C/B-lite paths
@@ -168,15 +183,20 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 			parsed[i] = m
 			for k, v := range m {
 				chainEnv[k] = v // later file in declaration order wins
-				if f.Layer == "layer1" {
-					interpEnv[k] = v // Layer-1 ONLY feeds interpolation (defensive even after T7)
-				}
 			}
 		}
 	}
-	for k, v := range envSliceToMap(in.Env) {
-		chainEnv[k] = v  // OS / Layer-1 seed wins last
-		interpEnv[k] = v // shell overlays the Layer-1 interpolation env too
+	// interpEnv = Flatten(shell, Layer-1 files) then shell overlaid last (shell wins),
+	// matching the run's COMPOSE_ENV_FILES interpolation. Flatten returns file values
+	// only; in.EnvFiles already carries existence-filtered paths (chain.Resolve drops
+	// missing), so GetEnvFromFile's error-on-missing never fires here.
+	interpEnv, err := Flatten(shellMap, layer1Files, true)
+	if err != nil {
+		return provenance.Report{}, fmt.Errorf("provenance flatten layer-1: %w", err)
+	}
+	for k, v := range shellMap {
+		chainEnv[k] = v  // OS / Layer-1 seed wins last (dotenv-lookup role)
+		interpEnv[k] = v // shell overlays the Layer-1 interpolation env (shell wins)
 	}
 	// mapping (B-lite) reads the Layer-1-only interpolation env, so "${WEB_PORT:-0}:80"
 	// resolves to the REAL run value: the chain value when WEB_PORT is in Layer-1,
@@ -204,7 +224,7 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 			continue // skip missing (parity)
 		}
 		if in.WantLayers { // --overview: raw ordered chain layer (separate read; parsed[i] is expanded/unordered)
-			if entries, lerr := parseOrderedLiteral(f.Path); lerr == nil {
+			if entries, lerr := ParseOrderedLiteral(f.Path); lerr == nil {
 				rep.Layers = append(rep.Layers, provenance.OverviewLayer{File: f.Path, Layer: "layer1", Entries: entries})
 			}
 		}
@@ -316,7 +336,7 @@ func (e *composeEngine) Provenance(ctx context.Context, in ProvInput) (provenanc
 				seenFile[ef.Path] = true
 				declaredFiles = append(declaredFiles, ef.Path)
 				if in.WantLayers { // --overview: one raw ordered layer per distinct declared env_file
-					if entries, lerr := parseOrderedLiteral(ef.Path); lerr == nil {
+					if entries, lerr := ParseOrderedLiteral(ef.Path); lerr == nil {
 						rep.Layers = append(rep.Layers, provenance.OverviewLayer{File: ef.Path, Layer: "env_file", Service: name, Entries: entries})
 					}
 				}

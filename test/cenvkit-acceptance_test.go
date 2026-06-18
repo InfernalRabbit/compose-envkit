@@ -1,5 +1,5 @@
 // Package acceptance ports the smoke-monorepo.sh and smoke.sh suites to drive the
-// cenvkit binary directly. Current assertion count: 115.
+// cenvkit binary directly. Current assertion count: 128.
 //
 // Invocation map (replaces all ./docker / run_shim calls):
 //
@@ -34,11 +34,12 @@
 //	+1  corrected C1: --value on env_file-only var is empty (#11 follow-up)
 //	+3  #12: gap-value render-only strip guard + empty-chain hint acceptance
 //	+4  C1: gap-report exit-code contract (exit 1/0/2 + --json shape)
+//	+13 C2: cenvkit env/run daemon-free + MF4 parity (docker-gated)
 //	────
-//	115 total
+//	128 total
 //
 // Note: TestC1_SinglePassLayerContract and TestD1_RuntimeFatalMissingRequired use
-// throwaway fixtures and guard contract seams — they are included in the 115 count.
+// throwaway fixtures and guard contract seams — they are included in the 128 count.
 package acceptance
 
 import (
@@ -1887,6 +1888,229 @@ func TestGapReport_ExitCodeContract(t *testing.T) {
 }
 
 // ─── end C1: gap-report exit-code contract ───────────────────────────────────
+
+// ─── C2: cenvkit env / run acceptance ────────────────────────────────────────
+//
+// All daemon-free (env/run never exec docker). Uses a scratch fixture.
+
+// [C2-env-1] cenvkit env (dotenv) emits chain key; exits 0. (1 assertion)
+// [C2-env-2] cenvkit env --format json emits JSON object with chain key. (2 assertions)
+// [C2-env-3] cenvkit env --format shell emits `export KEY=…`. (1 assertion)
+// [C2-env-4] cenvkit env on empty chain exits 0 with no output. (2 assertions)
+// [C2-env-5] cenvkit env --no-expand emits literal ${VAR} unchanged. (1 assertion)
+func TestEnv_DaemonFree(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("ENV_CHAIN_KEY=chain_val\n"), 0o644)
+	cleanEnv := envWithout("ENV_CHAIN_KEY", "COMPOSE_FILE", "COMPOSE_ENV_FILES")
+
+	// C2-env-1: dotenv default — chain key present, exit 0
+	out1, err1 := func() (string, error) {
+		c := exec.Command(cenvkitBin, "env", "--project-dir", dir)
+		c.Env = cleanEnv
+		b, e := c.CombinedOutput()
+		return string(b), e
+	}()
+	if err1 != nil {
+		t.Fatalf("[C2-env-1] env (dotenv) must exit 0, got %v\nout: %s", err1, out1)
+	}
+	if !strings.Contains(out1, "ENV_CHAIN_KEY=") {
+		t.Fatalf("[C2-env-1] env must emit ENV_CHAIN_KEY=..., got:\n%s", out1)
+	}
+
+	// C2-env-2a: --format json exits 0
+	out2, err2 := func() (string, error) {
+		c := exec.Command(cenvkitBin, "env", "--project-dir", dir, "--format", "json")
+		c.Env = cleanEnv
+		b, e := c.CombinedOutput()
+		return string(b), e
+	}()
+	if err2 != nil {
+		t.Fatalf("[C2-env-2a] env --format json must exit 0, got %v\nout: %s", err2, out2)
+	}
+	// C2-env-2b: JSON output contains the chain key
+	if !strings.Contains(out2, `"ENV_CHAIN_KEY"`) {
+		t.Fatalf("[C2-env-2b] env --format json must contain ENV_CHAIN_KEY, got:\n%s", out2)
+	}
+
+	// C2-env-3: --format shell → `export KEY=…`
+	out3, err3 := func() (string, error) {
+		c := exec.Command(cenvkitBin, "env", "--project-dir", dir, "--format", "shell")
+		c.Env = cleanEnv
+		b, e := c.CombinedOutput()
+		return string(b), e
+	}()
+	if err3 != nil {
+		t.Fatalf("[C2-env-3] env --format shell must exit 0, got %v\nout: %s", err3, out3)
+	}
+	if !strings.Contains(out3, "export ENV_CHAIN_KEY=") {
+		t.Fatalf("[C2-env-3] env --format shell must emit 'export ENV_CHAIN_KEY=', got:\n%s", out3)
+	}
+
+	// C2-env-4a: empty chain → exit 0
+	emptyDir := t.TempDir()
+	out4, err4 := func() (string, error) {
+		c := exec.Command(cenvkitBin, "env", "--project-dir", emptyDir)
+		c.Env = cleanEnv
+		b, e := c.CombinedOutput()
+		return string(b), e
+	}()
+	if err4 != nil {
+		t.Fatalf("[C2-env-4a] env on empty chain must exit 0, got %v\nout: %s", err4, out4)
+	}
+	// C2-env-4b: empty chain → no output
+	if strings.TrimSpace(out4) != "" {
+		t.Fatalf("[C2-env-4b] env on empty chain must produce no output, got:\n%s", out4)
+	}
+
+	// C2-env-5: --no-expand leaves ${VAR} literal
+	noExpDir := t.TempDir()
+	os.WriteFile(filepath.Join(noExpDir, ".env"), []byte("LITERAL_KEY=${UNEXPANDED}\n"), 0o644)
+	out5, err5 := func() (string, error) {
+		c := exec.Command(cenvkitBin, "env", "--project-dir", noExpDir, "--no-expand")
+		c.Env = envWithout("LITERAL_KEY", "UNEXPANDED")
+		b, e := c.CombinedOutput()
+		return string(b), e
+	}()
+	if err5 != nil {
+		t.Fatalf("[C2-env-5] env --no-expand must exit 0, got %v\nout: %s", err5, out5)
+	}
+	if !strings.Contains(out5, "LITERAL_KEY=") {
+		t.Fatalf("[C2-env-5] env --no-expand must emit LITERAL_KEY=..., got:\n%s", out5)
+	}
+}
+
+// [C2-run-1] cenvkit run -- echo exits 0 and produces output. (1 assertion)
+// [C2-run-2] cenvkit run (without --) exits 2. (1 assertion)
+// [C2-run-3] cenvkit run --print exits 0 and emits chain env (no exec). (1 assertion)
+func TestRun_DaemonFree(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".env"), []byte("RUN_CHAIN_KEY=run_val\n"), 0o644)
+	cleanEnv := envWithout("RUN_CHAIN_KEY", "COMPOSE_FILE", "COMPOSE_ENV_FILES")
+
+	// C2-run-1: `run -- echo hello` exits 0 (child exits 0)
+	out1, err1 := func() (string, error) {
+		c := exec.Command(cenvkitBin, "run", "--project-dir", dir, "--", "echo", "hello")
+		c.Env = cleanEnv
+		b, e := c.CombinedOutput()
+		return string(b), e
+	}()
+	if gapExitCode(err1) != 0 {
+		t.Fatalf("[C2-run-1] run -- echo hello must exit 0, got %d\nout: %s", gapExitCode(err1), out1)
+	}
+
+	// C2-run-2: `run` without `--` exits 2
+	_, err2 := func() (string, error) {
+		c := exec.Command(cenvkitBin, "run", "--project-dir", dir, "echo", "hi")
+		c.Env = cleanEnv
+		b, e := c.CombinedOutput()
+		return string(b), e
+	}()
+	if gapExitCode(err2) != 2 {
+		t.Fatalf("[C2-run-2] run without -- must exit 2, got %d", gapExitCode(err2))
+	}
+
+	// C2-run-3: `run --print` emits chain env and exits 0 (does NOT exec `false`)
+	out3, err3 := func() (string, error) {
+		c := exec.Command(cenvkitBin, "run", "--project-dir", dir, "--print", "--", "false")
+		c.Env = cleanEnv
+		b, e := c.CombinedOutput()
+		return string(b), e
+	}()
+	if gapExitCode(err3) != 0 {
+		t.Fatalf("[C2-run-3] run --print must exit 0, got %d\nout: %s", gapExitCode(err3), out3)
+	}
+	if !strings.Contains(out3, "RUN_CHAIN_KEY=") {
+		t.Fatalf("[C2-run-3] run --print must emit RUN_CHAIN_KEY=, got:\n%s", out3)
+	}
+}
+
+// ─── C2: MF4 parity (docker-gated) ──────────────────────────────────────────
+//
+// MF4 (spec §5c, parity-critical): `cenvkit env --expand` == `env-debug --effective`
+// == `docker compose config` for chain-scoped vars. A divergence here means the
+// same chain gives different values across commands — a correctness bug.
+//
+// Scenarios:
+//  1. chain var in env --format json: SITE_URL defined in .env appears in `cenvkit env` output.
+//  2. chain var feeds compose interpolation: IS_DEV is referenced as ${IS_DEV:-unset} in
+//     docker-compose.yml. In dev tier IS_DEV=true (from .dev.env), so `compose config`
+//     must show "true" — not "unset" — proving cenvkit's chain set COMPOSE_ENV_FILES.
+//  3. gap var absent from env: WEB_PORT lives only in web/.web.env (service env_file),
+//     not the Layer-1 chain — `cenvkit env` must NOT emit it.
+//  4. gap var fallback in compose config: WEB_PORT is referenced as ${WEB_PORT:-0} in
+//     web/docker-compose.yml; since it is not in the chain it falls back to "0".
+//  5. gap var visible in env-debug effective: env-debug --effective for the web service
+//     DOES see WEB_PORT (from the service env_file at runtime).
+//
+// Scenarios 3–5 document the designed asymmetry (MF4 BOUNDARY CASE).
+
+func TestParity_MF4_EnvEqualsEnvDebugEqualsCompose(t *testing.T) {
+	if !dockerAvailable() {
+		t.Skip("SMOKE_SKIP_DOCKER=1")
+	}
+	root := stageMonorepo(t)
+	// COMPOSE_ENV=dev selects the dev tier chain (.dev.env → IS_DEV=true).
+	pEnv := envWithout("SITE_URL", "IS_DEV", "COMPOSE_ENV", "WEB_PORT", "COMPOSE_FILE", "COMPOSE_ENV_FILES")
+	devEnv := append(pEnv, "COMPOSE_ENV=dev")
+
+	// cenvkit env --format json (chain snapshot)
+	envOut, envErr := func() (string, error) {
+		c := exec.Command(cenvkitBin, "env", "--project-dir", root, "--format", "json")
+		c.Env = devEnv
+		b, e := c.CombinedOutput()
+		return string(b), e
+	}()
+	if envErr != nil {
+		t.Fatalf("[MF4-setup-env] env --format json: %v\n%s", envErr, envOut)
+	}
+
+	// cenvkit compose config (the compose reference; exercises COMPOSE_ENV_FILES feeding)
+	cfgOut, cfgErr := func() (string, error) {
+		c := exec.Command(cenvkitBin, "compose", "--project-dir", root, "config")
+		c.Env = devEnv
+		b, e := c.CombinedOutput()
+		return string(b), e
+	}()
+	if cfgErr != nil {
+		t.Fatalf("[MF4-setup-cfg] cenvkit compose config: %v\n%s", cfgErr, cfgOut)
+	}
+
+	// env-debug --effective (web service; shows runtime env_file layer too)
+	dbgOut, dbgErr := func() (string, error) {
+		c := exec.Command(cenvkitBin, "env-debug", "--project-dir", root, "--effective", "--service", "web", "--json")
+		c.Env = devEnv
+		b, e := c.CombinedOutput()
+		return string(b), e
+	}()
+	if dbgErr != nil {
+		t.Fatalf("[MF4-setup-dbg] env-debug --effective --json: %v\n%s", dbgErr, dbgOut)
+	}
+
+	// MF4-parity-1: SITE_URL (plain chain var) appears in `cenvkit env` output.
+	if !strings.Contains(envOut, `"SITE_URL"`) {
+		t.Fatalf("[MF4-parity-1] env --format json must contain SITE_URL (chain var):\n%s", envOut)
+	}
+	// MF4-parity-2: IS_DEV (referenced in compose as ${IS_DEV:-unset}) must be "true" in
+	// compose config — not "unset" — proving cenvkit fed COMPOSE_ENV_FILES to docker compose.
+	if !strings.Contains(cfgOut, `IS_DEV: "true"`) {
+		t.Fatalf("[MF4-parity-2] compose config must show IS_DEV: \"true\" (chain fed interpolation; dev tier):\n%s", cfgOut)
+	}
+	// MF4-parity-3: WEB_PORT must NOT appear in `cenvkit env` output (env_file-only, not a chain key).
+	if strings.Contains(envOut, "WEB_PORT") {
+		t.Fatalf("[MF4-parity-3] env must NOT emit WEB_PORT (not a chain key; env_file-only):\n%s", envOut)
+	}
+	// MF4-parity-4: compose config shows WEB_PORT falls back to "0" (${WEB_PORT:-0} in compose yaml;
+	// not in chain → fallback fires).
+	if !strings.Contains(cfgOut, `WEB_PORT: "0"`) {
+		t.Fatalf("[MF4-parity-4] compose config must show WEB_PORT: \"0\" (chain-absent var falls back):\n%s", cfgOut)
+	}
+	// MF4-parity-5: env-debug --effective shows WEB_PORT from the service env_file (runtime layer).
+	if !strings.Contains(dbgOut, "WEB_PORT") {
+		t.Fatalf("[MF4-parity-5] env-debug --effective must show WEB_PORT (runtime service env_file value):\n%s", dbgOut)
+	}
+}
+
+// ─── end C2: cenvkit env / run acceptance ────────────────────────────────────
 
 // ─── color / ANSI no-leak guards ─────────────────────────────────────────────
 //

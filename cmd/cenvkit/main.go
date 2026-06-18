@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -16,6 +19,7 @@ import (
 	"github.com/InfernalRabbit/compose-envkit/internal/chain"
 	"github.com/InfernalRabbit/compose-envkit/internal/engine"
 	"github.com/InfernalRabbit/compose-envkit/internal/envfiles"
+	"github.com/InfernalRabbit/compose-envkit/internal/envmap"
 	"github.com/InfernalRabbit/compose-envkit/internal/provenance"
 	"github.com/InfernalRabbit/compose-envkit/internal/style"
 )
@@ -65,7 +69,8 @@ func newRootCmd() *cobra.Command {
 		},
 	})
 	root.AddCommand(newEnvFilesCmd(), newComposeCmd(), newValidateCmd(),
-		newInitCmd(), newEnvDebugCmd(), newGapReportCmd())
+		newInitCmd(), newEnvDebugCmd(), newGapReportCmd(),
+		newRunCmd(), newEnvCmd())
 	// COMPOSE_DEPTH is accepted-but-ignored (spec §5): include-graph load makes it obsolete.
 	return root
 }
@@ -129,6 +134,48 @@ func assemble(cmd *cobra.Command, envOverlay ...string) ([]string, chain.Result,
 		return nil, chain.Result{}, err
 	}
 	return merged, cr, nil
+}
+
+// resolvePopulator is the shared front half of `run` and `env`: resolve the
+// project dir, build the process env (os.Environ plus an optional `-e ENV`
+// overlay), resolve the Layer-1 chain for THAT env, and flatten it into a merged
+// shell-wins environment via internal/envmap.
+//
+// The `-e` overlay is a "COMPOSE_ENV=<v>" entry appended AFTER os.Environ() so it
+// wins via chain's osEnvMap last-wins (the same mechanism `validate --all` uses,
+// see newValidateCmd). It feeds BOTH the chain selection (which `.${ENV}.env` is
+// picked) AND the flatten base, so the two stay consistent. expand toggles
+// ${VAR} expansion (--expand default; --no-expand literal).
+func resolvePopulator(cmd *cobra.Command, env string, expand bool) (envmap.Resolved, error) {
+	dir, err := resolveProjectDir(cmd)
+	if err != nil {
+		return envmap.Resolved{}, err
+	}
+	osEnv := os.Environ()
+	if env != "" {
+		osEnv = append(osEnv, "COMPOSE_ENV="+env) // re-resolve the chain for this env; wins (last)
+	}
+	cr, err := chain.Resolve(chain.Input{ProjectDir: dir, OSEnv: osEnv, Hostname: os.Hostname})
+	if err != nil {
+		return envmap.Resolved{}, err
+	}
+	// envmap is fed ONLY the existence-filtered chain list (chain.Resolve drops
+	// missing paths, chain.go:177-178), so engine.Flatten's error-on-missing never
+	// fires for a legitimately-absent chain slot. processEnv = the same osEnv used
+	// for selection, so the flatten base and the shell-wins overlay match it.
+	return envmap.Resolve(envStringSliceToMap(osEnv), cr.Files, expand)
+}
+
+// envStringSliceToMap turns os.Environ()-style "K=V" entries into a map. Later
+// entries win (so an appended "-e" overlay overrides an inherited value).
+func envStringSliceToMap(env []string) map[string]string {
+	m := make(map[string]string, len(env))
+	for _, kv := range env {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			m[kv[:i]] = kv[i+1:]
+		}
+	}
+	return m
 }
 
 func envValue(vars []string, key string) string {
@@ -420,6 +467,167 @@ func newGapReportCmd() *cobra.Command {
 	}
 	c.Flags().BoolVar(&jsonOut, "json", false, "machine-readable JSON")
 	return c
+}
+
+// newEnvCmd emits the chain-derived environment (the no-docker "local arm").
+// It prints ONLY the keys the chain contributed, key-sorted, with the shell
+// overlaid (shell-wins) — it never dumps the whole inherited process env. An
+// empty/all-missing chain prints nothing and exits 0 (a fresh repo is legitimate).
+func newEnvCmd() *cobra.Command {
+	var (
+		envSel   string
+		noExpand bool
+		format   string
+	)
+	c := &cobra.Command{
+		Use:   "env",
+		Short: "Print the chain-derived environment (dotenv|json|shell)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			f, err := envmap.ParseFormat(format)
+			if err != nil {
+				return err
+			}
+			res, err := resolvePopulator(cmd, envSel, !noExpand)
+			if err != nil {
+				return err
+			}
+			return envmap.Emit(cmd.OutOrStdout(), res, f)
+		},
+	}
+	c.Flags().StringVarP(&envSel, "env", "e", "", "select the chain env (overrides COMPOSE_ENV); e.g. -e prod")
+	c.Flags().Bool("expand", true, "expand ${VAR} in chain values (default)")
+	c.Flags().BoolVar(&noExpand, "no-expand", false, "emit chain values literally, leaving ${VAR} unexpanded")
+	c.MarkFlagsMutuallyExclusive("expand", "no-expand")
+	c.Flags().StringVar(&format, "format", "dotenv", "output format: dotenv|json|shell")
+	return c
+}
+
+// newRunCmd flattens the chain and execs a command with the merged environment
+// (shell-wins). `--` is REQUIRED so cenvkit's own flags never collide with the
+// child's; everything after `--` is the command, passed verbatim. `--print` dumps
+// the chain-derived env (dotenv) and exits 0 WITHOUT exec'ing.
+func newRunCmd() *cobra.Command {
+	var (
+		envSel   string
+		noExpand bool
+		print    bool
+	)
+	c := &cobra.Command{
+		Use:                   "run [-e ENV] [--expand|--no-expand] [--print] -- <cmd> [args...]",
+		Short:                 "Exec a command with the chain-derived environment",
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// `--` enforcement: ArgsLenAtDash() is the count of args BEFORE `--` when
+			// present, and -1 when absent (cobra v1.10.2, probe-verified). args already
+			// has everything before `--` stripped and flag-parsing stops at `--`, so a
+			// child flag like `run -- echo --foo` passes `--foo` through untouched.
+			if cmd.ArgsLenAtDash() < 0 {
+				return &exitError{code: 2, msg: "run requires `--` before the command (e.g. cenvkit run -- npm test)"}
+			}
+			if len(args) == 0 {
+				return &exitError{code: 2, msg: "no command after `--`"}
+			}
+			res, err := resolvePopulator(cmd, envSel, !noExpand)
+			if err != nil {
+				return err
+			}
+			if print {
+				// --print: dump the chain-derived env (identical to `env --format
+				// dotenv`), skip exec, exit 0. Reveals plaintext secrets by design.
+				return envmap.EmitDotenv(cmd.OutOrStdout(), res)
+			}
+			return execChild(args, res.Full)
+		},
+	}
+	c.Flags().StringVarP(&envSel, "env", "e", "", "select the chain env (overrides COMPOSE_ENV); e.g. -e prod")
+	c.Flags().Bool("expand", true, "expand ${VAR} in chain values (default)")
+	c.Flags().BoolVar(&noExpand, "no-expand", false, "emit chain values literally, leaving ${VAR} unexpanded")
+	c.MarkFlagsMutuallyExclusive("expand", "no-expand")
+	c.Flags().BoolVar(&print, "print", false, "print the chain-derived env (dotenv) and exit; do not exec")
+	return c
+}
+
+// execChild runs args[0] with args[1:] and the given merged environment,
+// forwarding stdio and signals, and maps the outcome to a POSIX-parity exit code
+// via exitError (MF6):
+//   - clean exit            → the child's own code (0 = nil error)
+//   - child exits non-zero  → *exec.ExitError → its ExitCode()
+//   - child killed by signal → 128 + signo
+//   - command not found      → 127
+//   - found but not executable → 126
+//
+// We use exec.Command (not syscall.Exec) so --print can run earlier without an
+// ordering trap and so signal forwarding + exit mapping are explicit and testable.
+func execChild(args []string, env map[string]string) error {
+	bin := args[0]
+	// Resolve PATH ourselves so a missing binary maps to 127 and a non-executable
+	// file maps to 126 BEFORE we try to start it (exec.Command defers lookup to
+	// Start, conflating the two). LookPath returns exec.ErrNotFound / a permission
+	// error we can distinguish.
+	if _, err := exec.LookPath(bin); err != nil {
+		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+			return &exitError{code: 127, msg: bin + ": command not found"}
+		}
+		if errors.Is(err, os.ErrPermission) {
+			return &exitError{code: 126, msg: bin + ": permission denied"}
+		}
+		return &exitError{code: 127, msg: bin + ": " + err.Error()}
+	}
+
+	c := exec.Command(bin, args[1:]...)
+	c.Env = mapToEnvSlice(env)
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+
+	// Forward terminating signals to the child so Ctrl-C etc. reaches it; the
+	// child's own signal-terminated status then drives our 128+signo exit below.
+	// Scoped to the real terminating set (NOT a bare Notify) so we don't relay
+	// runtime-internal signals like SIGURG/SIGCHLD that Go uses.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	defer signal.Stop(sigCh)
+
+	if err := c.Start(); err != nil {
+		// Start failed after LookPath succeeded (rare: file changed under us).
+		if errors.Is(err, os.ErrPermission) {
+			return &exitError{code: 126, msg: bin + ": permission denied"}
+		}
+		return &exitError{code: 127, msg: bin + ": " + err.Error()}
+	}
+	go func() {
+		for s := range sigCh {
+			_ = c.Process.Signal(s)
+		}
+	}()
+
+	err := c.Wait()
+	if err == nil {
+		return nil // child exited 0
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			return &exitError{code: 128 + int(ws.Signal())} // signal-terminated; report already on stderr
+		}
+		return &exitError{code: ee.ExitCode()} // ordinary non-zero exit
+	}
+	return &exitError{code: 1, msg: "run " + bin + ": " + err.Error()}
+}
+
+// mapToEnvSlice turns a merged env map into a sorted os.Environ()-style slice for
+// exec. Sorting is purely for determinism (stable test goldens / reproducible
+// process inspection); the OS does not care about order.
+func mapToEnvSlice(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, k+"="+m[k])
+	}
+	return out
 }
 
 func main() {
