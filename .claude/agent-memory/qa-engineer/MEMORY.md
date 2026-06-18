@@ -10,3 +10,4 @@
 - [Overview gap text in render tests](overview-gap-text-in-render.md) — renderOverview gap line contains "NOT in the Layer-1 chain"; check for `interpolation:` prefix to distinguish trace-mode text; example.dev.env only has IS_DEV=true
 - [Service dotfiles are git-tracked](service-dotfiles-are-tracked.md) — web/.web.env etc. are tracked and staged by stageMonorepo cp -R; only root .env/.dev.env are gitignored/seeded; never overwrite service dotfiles with stubs
 - [DoD gate: gofmt -l . must be clean](dod-gate-gofmt.md) — go test alone is not enough; always run `gofmt -l . && go test ./... -count=1` before re-freezing
+- [t.Setenv("K","") does NOT unset the key](feedback-tsetenv-vs-unsetenv.md) — use os.Unsetenv+cleanup for in-process tests; envWithout() for binary acceptance; masking gaps with empty vars is a subtle failure mode
