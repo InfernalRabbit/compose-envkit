@@ -93,7 +93,7 @@ go build -o .cenvkit.bin ./cmd/cenvkit   # .cenvkit.bin is gitignored
 |---|---|
 | `cenvkit compose <args>` | assemble the Layer-1 chain, `exec docker compose <args>` (the core) |
 | `cenvkit env-files` | print the resolved `COMPOSE_ENV_FILES` (**Layer 1 only**), one path per line |
-| `cenvkit env-debug [--trace --var V\|--effective [--service S]\|--value --var V\|--chain\|--files\|--overview] [--json]` | daemon-free debugger / gap-detector |
+| `cenvkit env-debug [--trace --var V\|--effective [--service S]\|--value --var V\|--list\|--files\|--overview] [--json]` | daemon-free debugger / gap-detector |
 | `cenvkit validate [--all]` | `docker compose config -q`; `--all` validates dev AND prod |
 | `cenvkit init` | seed `.X` from `example.X` (**no-clobber**), fan out one directory level |
 | `cenvkit version` | print the version |
@@ -120,7 +120,7 @@ NO `docker compose` shell-out:
   `${env_file_only_var}` shows its fallback — the true container value); `env_file:`
   entries are verbatim; inline overrides `env_file:`.
 - `--value --var V` — `V`'s interpolation value (one line; empty if env_file-only).
-- `--chain` (default) — the Layer-1 chain files (secrets last). `--files` — **two
+- `--list` (default) — the Layer-1 chain files (secrets last). `--files` — **two
   groups**: *interpolation* (= `COMPOSE_ENV_FILES`, Layer 1) and *runtime-only*
   (each service's declared `env_file:` paths, NOT interpolated).
 - `--overview` — a per-file **layering** view: the interpolation chain walked file

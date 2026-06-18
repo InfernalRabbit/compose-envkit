@@ -5,13 +5,29 @@ Auto-loaded by every teammate. `.claude/TEAM.md` is the FULL protocol but is
 
 ## Project overview
 
-`compose-envkit` closes the gap where a service `env_file:` is invisible to
-Docker Compose's compile-time `${VAR}` interpolation. The implementation is
-**`cenvkit`**, a Go CLI on `github.com/compose-spec/compose-go` (Docker's own
-loader), distributed dual-mode (installable + vendorable), v1 "thin" (assemble
-`COMPOSE_ENV_FILES`, exec `docker compose`). The original POSIX-`sh` kit has been
-removed — cenvkit is the only implementation. Spec:
-`docs/superpowers/specs/2026-06-15-cenvkit-go-rewrite-design.md`.
+**`cenvkit`** is a Go CLI (on Docker's own `compose-go` loader; installable +
+vendorable) that does two coherent things:
+
+1. **Gap-debugger (the moat).** It detects + explains the Docker Compose
+   `env_file:`→`${VAR}` interpolation gap — a `${VAR}` satisfied only by a service
+   `env_file:` silently falls back at the run (docker/compose#3435, never fixed
+   upstream; this is the uncontested niche). `cenvkit env-debug` surfaces it with
+   full provenance, daemon-free; **`cenvkit gap-report`** is a CI/pre-build lint
+   (exit 1 = gaps / 0 = clean / 2 = no compose file).
+2. **Env-chain populator (the local arm).** It delivers the same Layer-1 chain to
+   whatever consumes it: `cenvkit compose` (→ `COMPOSE_ENV_FILES`, exec
+   `docker compose`), **`cenvkit run -- <cmd>`** (exec any process with the merged
+   env, no docker), **`cenvkit env`** (emit dotenv/json/shell). One tool for compose
+   AND local dev — it *composes with* make/just, it does not replace them.
+
+Chain file **`.cenvkit.envchain`**; selector **`CENVKIT_ENV`** (token
+`${CENVKIT_ENV}`, alias `${ENV}`); optional `[name]` sections selected by
+`--chain <name>`. compose-go is isolated behind `internal/engine`; the one
+expansion path keeps `cenvkit env --expand` == `env-debug --effective` ==
+`docker compose config`. The POSIX-`sh` kit was removed — cenvkit is the only
+implementation. Design:
+`docs/superpowers/specs/2026-06-19-cenvkit-populator-and-gap-debugger-design.md`
+(+ the 2026-06-15/-17 specs for history).
 
 ## Module boundaries (no overlap; refuse work outside your zone)
 
@@ -42,8 +58,10 @@ removed — cenvkit is the only implementation. Spec:
   acceptance.
 - Go: `gofmt`, wrapped errors with context, table-driven tests, small focused
   packages (`internal/chain`, `internal/engine`, `internal/provenance`).
-- Safety rules: **no `sudo`, no `chmod 777`, no secrets written to disk**;
-  secrets load **last** in the chain (last-wins).
+- Safety rules: **no `sudo`, no `chmod 777`, no secrets written to disk**. Secret
+  *management* is **out of scope** (no masking/encryption/backends); `.secrets.env`
+  just loads **last** in the chain (last-wins). External managers wrap cenvkit
+  (`sops exec-env -- cenvkit run …`).
 - POSIX `sh` for any shipped shell (the vendor shim); `sh -n` clean.
 
 ## Operating principles

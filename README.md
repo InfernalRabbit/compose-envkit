@@ -1,15 +1,18 @@
 # compose-envkit
 
-A small **Go CLI** (`cenvkit`) that adds a **Docker Compose env-chain + a
-daemon-free provenance / gap debugger** to any project, built on Docker's own
-`compose-go` loader.
+A small **Go CLI** (`cenvkit`) built on Docker's own `compose-go` loader. It does
+two things:
 
-It manages the project env-chain that drives compose-time `${VAR}` interpolation,
-keeps each service's `env_file:` **runtime-only** (native Docker semantics), and
-**surfaces the gap** native Compose leaves open: a value defined only in a service
-`env_file:` is invisible to `${VAR}` interpolation, so `ports: "${APP_PORT:-3000}:80"`
-silently falls back to `3000`. cenvkit's `env-debug` detects and explains exactly
-that. (See [The gap](#the-gap-native-compose-doesnt-close).)
+- **Debugs the one gap native Compose leaves open.** A value defined only in a
+  service `env_file:` is invisible to compile-time `${VAR}` interpolation, so
+  `ports: "${APP_PORT:-3000}:80"` silently falls back to `3000`. `cenvkit env-debug`
+  detects + explains it with provenance (**daemon-free**), and **`cenvkit gap-report`**
+  is a CI/pre-build lint. No other tool does this. (See
+  [The gap](#the-gap-native-compose-doesnt-close).)
+- **Populates the env-chain for any consumer.** `cenvkit compose` (→ `docker
+  compose`), **`cenvkit run -- <cmd>`** (any process, no docker), **`cenvkit env`**
+  (emit dotenv/json/shell) — one chain, one source of truth for compose *and* local
+  dev. It composes with make/just; it doesn't replace them.
 
 **`cenvkit` is a Go CLI** built on Docker's own compose loader
 (`compose-spec/compose-go`). It is the only implementation — the original
@@ -33,9 +36,11 @@ In your project:
 
 ```sh
 cenvkit init               # seed .X from example.X (no-clobber), fan out one level
-cenvkit env-files          # the resolved COMPOSE_ENV_FILES chain, one path/line
+cenvkit gap-report         # CI lint: exit 1 if a ${VAR} is satisfied only by env_file:
+cenvkit env-debug          # inspect the chain / provenance (daemon-free)
 cenvkit compose config     # render config (interpolation = your Layer-1 chain)
-cenvkit env-debug --chain  # inspect the chain
+cenvkit run -- npm test    # run any command with the merged chain env (no docker)
+cenvkit env --format shell # emit the merged env (eval-able)
 ```
 
 Or **vendor** it: commit the Go module + the POSIX `cenvkit` shim and run
@@ -80,7 +85,35 @@ chain.** Full reference: [`docs/cenvkit.md`](docs/cenvkit.md).
 ```sh
 cenvkit env-files                          # the resolved COMPOSE_ENV_FILES (Layer-1 chain)
 cenvkit env-debug --trace --var APP_PORT   # in the chain, or an env_file gap?
+cenvkit gap-report                         # CI/pre-build lint: non-zero if any ${VAR} is env_file-only
 ```
+
+---
+
+## Deliver the chain anywhere — `run` / `env`
+
+The same Layer-1 chain that feeds compose can drive **any** consumer, so you keep
+one source of truth instead of two tools:
+
+```sh
+cenvkit run -- npm run dev             # exec a process with the merged chain env (no docker)
+cenvkit run --no-expand -- printenv    # leave ${VAR} literal
+cenvkit env                            # emit the merged env (dotenv); --format json|shell
+eval "$(cenvkit env --format shell)"   # load it into the current shell
+```
+
+`run` / `env` expand `${VAR}` / `${VAR:-def}` via compose-go's own dotenv engine, so
+`cenvkit env --expand` is **byte-identical** to what `docker compose` interpolates
+(and to `env-debug --effective`). `-e <env>` overrides `CENVKIT_ENV` for one call;
+shell-set vars win over the chain (compose parity).
+
+**Named chains** — give `.cenvkit.envchain` optional `[name]` sections and pick one
+with `--chain <name>` (default = the header-less / `[default]` list); sections are
+standalone (no inheritance) and orthogonal to `CENVKIT_ENV`.
+
+**Secrets are out of scope** — cenvkit never masks/encrypts/manages them;
+`.secrets.env` just loads last (last-wins), nothing written to disk. For real secret
+management, wrap it: `sops exec-env -- cenvkit run -- <cmd>`.
 
 ---
 
@@ -153,7 +186,7 @@ structured report (tooling/CI).
 
 | Mode | What it shows |
 |---|---|
-| `--chain` (default) | the Layer-1 chain files, in load order (secrets last) |
+| `--list` (default) | the Layer-1 chain files, in load order (secrets last) |
 | `--files` | two groups: interpolation (`COMPOSE_ENV_FILES`, Layer 1) + runtime-only (service `env_file:` paths) |
 | `--overview` | per-file layering walk (`+`/`~`/`·` markers, raw values) + per-service `env_file:` layers + `inline environment:`, with `⚠ gap` lines |
 | `--effective [--service S]` | each service's effective env, with the source of every value (`env_file:` vs inline `environment:`) |

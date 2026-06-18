@@ -321,7 +321,7 @@ Docker daemon)**. Add `--json` to any mode for the structured `Report`.
 
 | Mode | Shows |
 |---|---|
-| `--chain` (default) | the Layer-1 chain files, in load order (secrets last) |
+| `--list` (default) | the Layer-1 chain files, in load order (secrets last) |
 | `--files` | two groups: **interpolation** (`COMPOSE_ENV_FILES`, Layer 1) + **runtime-only** (service `env_file:` paths, by service) |
 | `--overview` | the whole env **layering** at a glance: per-file accumulation walk (`+`/`~`/`·` markers, raw values) + per-service `env_file:` layers + `inline environment:`, with `⚠ gap` lines |
 | `--trace --var V` | if `V` is in the chain: its winner, shadowed files, and effects. If `V` is env_file-only: the **gap** (falls back at the run) + the runtime def + a fix |
