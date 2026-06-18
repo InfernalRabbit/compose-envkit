@@ -13,3 +13,4 @@
 - [t.Setenv("K","") does NOT unset the key](feedback-tsetenv-vs-unsetenv.md) — use os.Unsetenv+cleanup for in-process tests; envWithout() for binary acceptance; masking gaps with empty vars is a subtle failure mode
 - [Chain default tier is "dev"](chain-default-tier-is-dev.md) — .dev.env loads by default when COMPOSE_ENV is unset; use a non-default tier (staging/prod) when testing -e flag re-resolution
 - [Stale-count guard pattern](stale-count-guard-pattern.md) — const declaredAssertions + TestAssertionCountHeader kills recurring header-count drift; bump both together when adding assertions
+- [cenvkit env output is dotenv-quoted](env-output-quoted-format.md) — assert `CI="true"` not `CI=true`; envmap.Emit wraps values in double-quotes

@@ -31,3 +31,15 @@ var — it comes from the `docker-compose.dev.yml`/`docker-compose.prod.yml`
 compose overlays (COMPOSE_FILE selector), so it does not need the Layer-1 seed;
 IS_DEV (from `example.dev.env`/`example.prod.env`) is the seed-dependent one.
 Related: [[carried-bug-classes-cenvkit]].
+
+**C4 recurrence (2026-06-19):** named-chain sections in `.cenvkit.envchain`
+introduce NEW Layer-1 files (e.g. `[ci]` → `.ci.env`). qa created `.ci.env`
+on disk locally but did NOT track it / add an `example.ci.env` template + a
+`stageMonorepo` seed entry — so C4-3/C4-4 (`--chain ci`) pass locally but break
+on a fresh checkout. The lead caught it via committed-tree discipline
+(`git stash -u && go test`). Fix pattern = TRACKED `example.<x>.env` + a
+`{example.<x>.env → .<x>.env}` entry in stageMonorepo's seed slice (test ~:149) +
+delete the stray `.<x>.env`. **Reviewer cue:** whenever a fixture chain/section
+references a NEW `.<name>.env`, grep `git ls-files` for a matching `example.<name>.env`
+template AND confirm stageMonorepo seeds it — a dotfile present on disk but absent
+from `git ls-files` is the tell. Verify via `rm -f the-dotfile && go test ./test/...`.
