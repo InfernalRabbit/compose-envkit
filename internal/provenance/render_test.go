@@ -119,9 +119,9 @@ func overviewReport() Report {
 			},
 		}},
 		Layers: []OverviewLayer{
-			// Layer-1 chain: .env defines SITE_URL (+) and COMPOSE_ENV (+).
+			// Layer-1 chain: .env defines SITE_URL (+) and CENVKIT_ENV (+).
 			{File: "/p/.env", Layer: "layer1", Entries: []OverviewEntry{
-				{Key: "COMPOSE_ENV", RawValue: "dev"},
+				{Key: "CENVKIT_ENV", RawValue: "dev"},
 				{Key: "SITE_URL", RawValue: "example.com"},
 			}},
 			// Layer-1 chain: .dev.env overrides SITE_URL (~) and adds IS_DEV (+).
@@ -227,7 +227,7 @@ func TestRenderHuman_Overview_GapLine(t *testing.T) {
 	}
 }
 
-// TestRenderHuman_Overview_Header: the header block carries COMPOSE_ENV=<v>
+// TestRenderHuman_Overview_Header: the header block carries CENVKIT_ENV=<v>
 // (from <source>) and Project dir.
 func TestRenderHuman_Overview_Header(t *testing.T) {
 	var b bytes.Buffer
@@ -239,8 +239,8 @@ func TestRenderHuman_Overview_Header(t *testing.T) {
 	})
 	got := b.String()
 
-	if !strings.Contains(got, "COMPOSE_ENV") || !strings.Contains(got, "dev") {
-		t.Fatalf("overview: expected COMPOSE_ENV=dev in header:\n%s", got)
+	if !strings.Contains(got, "CENVKIT_ENV") || !strings.Contains(got, "dev") {
+		t.Fatalf("overview: expected CENVKIT_ENV=dev in header:\n%s", got)
 	}
 	if !strings.Contains(got, ".env") {
 		t.Fatalf("overview: expected source label '.env' in header:\n%s", got)

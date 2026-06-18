@@ -98,7 +98,7 @@ func TestResolve_MonorepoFixture_CrossSubproject(t *testing.T) {
 	}
 	res, err := engine.New().Resolve(context.Background(), engine.Input{
 		ProjectDir: root,
-		Env:        []string{"COMPOSE_ENV=dev"},
+		Env:        []string{"CENVKIT_ENV=dev"},
 	})
 	if err != nil {
 		t.Fatalf("Resolve monorepo: %v", err)
@@ -115,7 +115,7 @@ func TestResolve_MonorepoFixture_CrossSubproject(t *testing.T) {
 	}
 }
 
-// COMPOSE_FILE=base.yml:overlay.${COMPOSE_ENV}.yml must select the env-specific
+// COMPOSE_FILE=base.yml:overlay.${CENVKIT_ENV}.yml must select the env-specific
 // overlay's env_file. Docker-free: asserts Result.EnvFiles, not a compose-config value.
 func TestResolve_InterpolatedComposeFileOverlay(t *testing.T) {
 	dir := t.TempDir()
@@ -139,8 +139,8 @@ services:
 		res, err := engine.New().Resolve(context.Background(), engine.Input{
 			ProjectDir: dir,
 			Env: []string{
-				"COMPOSE_ENV=" + env,
-				"COMPOSE_FILE=docker-compose.yml:docker-compose.${COMPOSE_ENV}.yml",
+				"CENVKIT_ENV=" + env,
+				"COMPOSE_FILE=docker-compose.yml:docker-compose.${CENVKIT_ENV}.yml",
 			},
 		})
 		if err != nil {

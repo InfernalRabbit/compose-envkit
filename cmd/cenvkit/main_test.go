@@ -76,7 +76,7 @@ func mustWriteFile(t *testing.T, path, content string) {
 // to restore the original value so we don't poison parallel tests.
 func clearGapEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"COMPOSE_FILE", "COMPOSE_ENV_FILES", "COMPOSE_ENV", "WEB_PORT"} {
+	for _, k := range []string{"COMPOSE_FILE", "COMPOSE_ENV_FILES", "CENVKIT_ENV", "WEB_PORT"} {
 		prev, hadPrev := os.LookupEnv(k)
 		os.Unsetenv(k) //nolint:errcheck
 		t.Cleanup(func() {
@@ -511,16 +511,16 @@ func TestEnvCmd_Quote_DoubleQuote(t *testing.T) {
 }
 
 // TestEnvCmd_Env_Flag_ReResolves: -e <env> re-resolves the chain to the requested tier.
-// The chain default is "dev" (when COMPOSE_ENV is unset and .env has no COMPOSE_ENV= line).
+// The chain default is "dev" (when CENVKIT_ENV is unset and .env has no CENVKIT_ENV= line).
 // We use a "staging" tier that is NOT the default — without -e staging, .staging.env is
-// absent from the chain; with -e staging, COMPOSE_ENV=staging is injected and it loads.
+// absent from the chain; with -e staging, CENVKIT_ENV=staging is injected and it loads.
 func TestEnvCmd_Env_Flag_ReResolves(t *testing.T) {
 	dir := t.TempDir()
-	// Base chain file (no COMPOSE_ENV= line → default tier is "dev")
+	// Base chain file (no CENVKIT_ENV= line → default tier is "dev")
 	mustWriteFile(t, filepath.Join(dir, ".env"), "BASE_KEY=base_val\n")
-	// Staging-tier chain file — only loaded when COMPOSE_ENV=staging (via -e staging)
+	// Staging-tier chain file — only loaded when CENVKIT_ENV=staging (via -e staging)
 	mustWriteFile(t, filepath.Join(dir, ".staging.env"), "STAGING_KEY=staging_val\n")
-	for _, key := range []string{"BASE_KEY", "STAGING_KEY", "COMPOSE_ENV"} {
+	for _, key := range []string{"BASE_KEY", "STAGING_KEY", "CENVKIT_ENV"} {
 		prev, had := os.LookupEnv(key)
 		os.Unsetenv(key) //nolint:errcheck
 		func(k, pv string, hp bool) {

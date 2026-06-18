@@ -84,7 +84,7 @@ type HumanOpts struct {
 	Overview  bool   // per-file layering overview (raw values, +/~/· markers) — renders Report.Layers
 
 	// Header inputs for the --overview mode (best-effort; from chain.Resolve + cmd).
-	ComposeEnv       string // resolved COMPOSE_ENV value
+	ComposeEnv       string // resolved CENVKIT_ENV value
 	ComposeEnvSource string // where it came from: "shell" | ".env" | "default"
 	ProjectDir       string // project dir (basename used as the overview title)
 
@@ -216,9 +216,9 @@ func renderOverview(w io.Writer, r Report, o HumanOpts, s Styler) {
 	fmt.Fprintln(w, s.Header(fmt.Sprintf("env overview — %s (mode: overview)", title)))
 	if o.ComposeEnv != "" {
 		if o.ComposeEnvSource != "" {
-			fmt.Fprintf(w, "  COMPOSE_ENV = %s (from %s)\n", s.Value(o.ComposeEnv), s.SourceLabel(o.ComposeEnvSource))
+			fmt.Fprintf(w, "  CENVKIT_ENV = %s (from %s)\n", s.Value(o.ComposeEnv), s.SourceLabel(o.ComposeEnvSource))
 		} else {
-			fmt.Fprintf(w, "  COMPOSE_ENV = %s\n", s.Value(o.ComposeEnv))
+			fmt.Fprintf(w, "  CENVKIT_ENV = %s\n", s.Value(o.ComposeEnv))
 		}
 	}
 	if o.ProjectDir != "" {

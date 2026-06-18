@@ -1,4 +1,4 @@
-// Package chain resolves Layer-1: the .docker-env-chain file list plus the
+// Package chain resolves Layer-1: the .cenvkit.envchain file list plus the
 // "K=V" seed environment for the engine. Pure Go — imports no compose-go.
 package chain
 
@@ -23,13 +23,13 @@ type Input struct {
 type Result struct {
 	Files            []string // ordered absolute Layer-1 paths, existing only, deduped
 	Vars             []string // merged "K=V" seed for the engine (OS env wins over file vars), sorted
-	ComposeEnv       string   // resolved COMPOSE_ENV ("dev" default)
+	ComposeEnv       string   // resolved CENVKIT_ENV ("dev" default)
 	ComposeEnvSource string   // where ComposeEnv came from: "shell" | ".env" | "default" (for the --overview header)
 	Host             string   // resolved + sanitized host ([A-Za-z0-9._-])
 }
 
-// defaultChain is used when no .docker-env-chain file is present (spec §4 step 2).
-var defaultChain = []string{".env", ".${COMPOSE_ENV}.env", ".secrets.env"}
+// defaultChain is used when no .cenvkit.envchain file is present (spec §4 step 2).
+var defaultChain = []string{".env", ".${CENVKIT_ENV}.env", ".secrets.env"}
 
 // sanitizeToken keeps only [A-Za-z0-9._-]; everything else is dropped. This kills
 // the legacy sed-injection class and prevents a "," (the COMPOSE_ENV_FILES
@@ -87,15 +87,15 @@ func parseDotEnv(path string) (map[string]string, error) {
 	return out, sc.Err()
 }
 
-// resolveComposeEnv returns the resolved COMPOSE_ENV and the source it came from
+// resolveComposeEnv returns the resolved CENVKIT_ENV and the source it came from
 // ("shell" | ".env" | "default") for the --overview header (decision §8a).
 func resolveComposeEnv(in Input, osEnv map[string]string) (value, source string) {
-	if v := osEnv["COMPOSE_ENV"]; v != "" {
+	if v := osEnv["CENVKIT_ENV"]; v != "" {
 		return sanitizeToken(v), "shell"
 	}
-	// fall back to a COMPOSE_ENV= line in the root .env
+	// fall back to a CENVKIT_ENV= line in the root .env
 	if m, err := parseDotEnv(filepath.Join(in.ProjectDir, ".env")); err == nil {
-		if v := m["COMPOSE_ENV"]; v != "" {
+		if v := m["CENVKIT_ENV"]; v != "" {
 			return sanitizeToken(v), ".env"
 		}
 	}
@@ -120,7 +120,7 @@ func resolveHost(in Input, osEnv map[string]string) string {
 func substituteTokens(tmpl, composeEnv, host string) string {
 	r := strings.NewReplacer(
 		"${ENV}", composeEnv,
-		"${COMPOSE_ENV}", composeEnv,
+		"${CENVKIT_ENV}", composeEnv,
 		"${HOST}", host,
 		"${HOSTNAME}", host,
 	)
@@ -128,12 +128,12 @@ func substituteTokens(tmpl, composeEnv, host string) string {
 }
 
 func readChainTemplates(projectDir string) ([]string, error) {
-	f, err := os.Open(filepath.Join(projectDir, ".docker-env-chain"))
+	f, err := os.Open(filepath.Join(projectDir, ".cenvkit.envchain"))
 	if os.IsNotExist(err) {
 		return append([]string(nil), defaultChain...), nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read .docker-env-chain: %w", err)
+		return nil, fmt.Errorf("read .cenvkit.envchain: %w", err)
 	}
 	defer f.Close()
 	var tmpls []string
@@ -146,7 +146,7 @@ func readChainTemplates(projectDir string) ([]string, error) {
 		tmpls = append(tmpls, line)
 	}
 	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("scan .docker-env-chain: %w", err)
+		return nil, fmt.Errorf("scan .cenvkit.envchain: %w", err)
 	}
 	return tmpls, nil
 }
@@ -197,8 +197,8 @@ func Resolve(in Input) (Result, error) {
 	for k, v := range osEnv {
 		merged[k] = v
 	}
-	if _, ok := merged["COMPOSE_ENV"]; !ok {
-		merged["COMPOSE_ENV"] = composeEnv
+	if _, ok := merged["CENVKIT_ENV"]; !ok {
+		merged["CENVKIT_ENV"] = composeEnv
 	}
 	keys := make([]string, 0, len(merged))
 	for k := range merged {

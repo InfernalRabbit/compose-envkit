@@ -130,12 +130,12 @@ There are two distinct things, and cenvkit keeps them distinct.
 
 ### 4.1 The project chain (Layer 1) — this is `COMPOSE_ENV_FILES`
 
-Listed in `.docker-env-chain` (one path template per line; `#` comments and blank
+Listed in `.cenvkit.envchain` (one path template per line; `#` comments and blank
 lines ignored). If that file is absent, the built-in default is:
 
 ```
 .env             # non-secret defaults (committed via example.env)
-.${COMPOSE_ENV}.env   # per-environment overlay: .dev.env / .prod.env / …
+.${CENVKIT_ENV}.env   # per-environment overlay: .dev.env / .prod.env / …
 .secrets.env     # secrets, gitignored — listed LAST so it wins (last-wins)
 ```
 
@@ -151,12 +151,12 @@ A typical explicit chain with a per-machine layer:
 **This — and only this — becomes `COMPOSE_ENV_FILES`**, the context
 `docker compose` uses to interpolate `${VAR}` in your YAML.
 
-**Tokens** substituted in each entry: `${ENV}` and `${COMPOSE_ENV}` → the resolved
+**Tokens** substituted in each entry: `${ENV}` and `${CENVKIT_ENV}` → the resolved
 env; `${HOST}` and `${HOSTNAME}` → the machine hostname. Both are **sanitized** to
 `[A-Za-z0-9._-]` (a hostname with `|`/`&`/`,` cannot inject a path or split the
 file list). Non-existent files are silently skipped.
 
-- **`COMPOSE_ENV` resolution:** shell `COMPOSE_ENV` > a `COMPOSE_ENV=` line in
+- **`CENVKIT_ENV` resolution:** shell `CENVKIT_ENV` > a `CENVKIT_ENV=` line in
   `.env` > `"dev"`.
 - **`HOST`/`HOSTNAME`:** exported `HOSTNAME` > the `hostname` command.
 
@@ -220,7 +220,7 @@ paths** appear here — they are runtime-only (see `env-debug --files` for those
 ### `cenvkit validate`
 
 ```sh
-cenvkit validate          # validate the currently-resolved COMPOSE_ENV
+cenvkit validate          # validate the currently-resolved CENVKIT_ENV
 cenvkit validate --all    # validate dev AND prod (re-resolves the chain per env)
 ```
 
@@ -302,13 +302,13 @@ cenvkit --project-dir web env-files   # same, without cd
 
 ### dev / prod from one knob
 
-Drive overlays with a single `COMPOSE_ENV`. A `COMPOSE_FILE` selector like
-`docker-compose.yml:docker-compose.${COMPOSE_ENV}.yml` is interpolated by cenvkit
+Drive overlays with a single `CENVKIT_ENV`. A `COMPOSE_FILE` selector like
+`docker-compose.yml:docker-compose.${CENVKIT_ENV}.yml` is interpolated by cenvkit
 (see §9), and per-environment chain tiers (`.dev.env`/`.prod.env`) are picked up:
 
 ```sh
 cenvkit compose config                      # dev (default)
-COMPOSE_ENV=prod cenvkit compose config     # prod overlay + .prod.env tiers
+CENVKIT_ENV=prod cenvkit compose config     # prod overlay + .prod.env tiers
 ```
 
 ---
@@ -366,7 +366,7 @@ flags any `${VAR}` that the run will fall back on. (This restores the sh kit's
 ```sh
 $ cenvkit env-debug --overview
 env overview — myproject (mode: overview)
-  COMPOSE_ENV = dev (from .env)
+  CENVKIT_ENV = dev (from .env)
   Project dir = /app
 
 Interpolation chain (COMPOSE_ENV_FILES)
@@ -492,8 +492,8 @@ cenvkit env-debug --trace --var APP_PORT --json | grep -q '"gap": *true' \
   time. (At runtime, inline `environment:` still overrides `env_file:` within a
   service — native.)
 - **`COMPOSE_FILE` overlays.** Selectors like
-  `docker-compose.yml:docker-compose.${COMPOSE_ENV}.yml` work: cenvkit interpolates
-  `${COMPOSE_ENV}`/`${ENV}` and splits on `COMPOSE_PATH_SEPARATOR` (else the OS
+  `docker-compose.yml:docker-compose.${CENVKIT_ENV}.yml` work: cenvkit interpolates
+  `${CENVKIT_ENV}`/`${ENV}` and splits on `COMPOSE_PATH_SEPARATOR` (else the OS
   path-list separator — never `,`).
 - **`COMPOSE_DEPTH`** is **accepted-but-ignored** — the include-graph makes the old
   depth-bounded glob discovery obsolete; the var is tolerated (no error).

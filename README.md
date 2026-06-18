@@ -87,7 +87,7 @@ cenvkit env-debug --trace --var APP_PORT   # in the chain, or an env_file gap?
 ## The env-chain
 
 **The project chain is `COMPOSE_ENV_FILES`** — the interpolation context. Listed
-in `.docker-env-chain` (or built-in defaults when that file is absent). The default
+in `.cenvkit.envchain` (or built-in defaults when that file is absent). The default
 chain is:
 
 ```
@@ -96,8 +96,8 @@ chain is:
 .secrets.env     # secrets, gitignored — loaded LAST so it wins
 ```
 
-`${ENV}` (alias `${COMPOSE_ENV}`) is resolved as **shell `COMPOSE_ENV`
-> `.env`'s `COMPOSE_ENV` > `"dev"`**. Non-existent files are silently skipped.
+`${CENVKIT_ENV}` (alias `${ENV}`) is resolved as **shell `CENVKIT_ENV`
+> `.env`'s `CENVKIT_ENV` > `"dev"`**. Non-existent files are silently skipped.
 
 **Service `env_file:` is runtime-only** — it configures the container, not
 interpolation, and is **not** added to `COMPOSE_ENV_FILES`. cenvkit still loads the
@@ -105,9 +105,9 @@ real, include-aware model and enumerates those paths, but only to power `env-deb
 (the gap-detector and the `--files` runtime-only view).
 
 ```
-  shell COMPOSE_ENV / .env / "dev"  ─┐
+  shell CENVKIT_ENV / .env / "dev"  ─┐
                                      ├─►  ${ENV} substitution
-  .docker-env-chain (Layer 1)  ──────┴─►  COMPOSE_ENV_FILES  ──►  docker compose
+  .cenvkit.envchain (Layer 1)  ──────┴─►  COMPOSE_ENV_FILES  ──►  docker compose
                                                                   (interpolation)
   service env_file:  ──►  container runtime env only  +  env-debug gap-detector
 ```
@@ -192,7 +192,7 @@ cenvkit env-debug --trace --var APP_PORT --json # the whole resolution, as JSON
 compose-envkit/
 ├── cmd/cenvkit/         # the Go CLI entry (cobra)
 ├── internal/
-│   ├── chain/           # Layer 1 — the .docker-env-chain project chain (pure Go)
+│   ├── chain/           # Layer 1 — the .cenvkit.envchain project chain (pure Go)
 │   ├── engine/          # service env_file: enumeration for env-debug (the only compose-go importer)
 │   ├── envfiles/        # merge / order / dedup into COMPOSE_ENV_FILES
 │   ├── provenance/      # env-debug provenance model + human/JSON render

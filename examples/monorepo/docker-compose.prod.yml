@@ -1,6 +1,6 @@
 # ============================================
-# Root PROD overlay — selected by COMPOSE_FILE's ${COMPOSE_ENV} token (example.env)
-# when COMPOSE_ENV=prod. Re-opens `web` to tag the tier; in a real stack this is
+# Root PROD overlay — selected by COMPOSE_FILE's ${CENVKIT_ENV} token (example.env)
+# when CENVKIT_ENV=prod. Re-opens `web` to tag the tier; in a real stack this is
 # where prod images / restart policies / TLS / replicas live.
 # ============================================
 

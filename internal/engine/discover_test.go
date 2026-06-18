@@ -28,7 +28,7 @@ func TestHasComposeFile(t *testing.T) {
 		{"empty value falls to discovery (none) => false", nil, "", false},
 		// token-only entry must interpolate before stat (RED on raw-stat impl):
 		{"interpolated-only overlay exists", []string{"docker-compose.prod.yml"},
-			"docker-compose.${COMPOSE_ENV}.yml", true},
+			"docker-compose.${CENVKIT_ENV}.yml", true},
 		// comma must NOT be treated as a separator (RED on the deleted heuristic):
 		{"comma-joined is a single (nonexistent) path", []string{"a.yml", "b.yml"},
 			"a.yml,b.yml", false},
@@ -39,8 +39,8 @@ func TestHasComposeFile(t *testing.T) {
 			for _, f := range tc.present {
 				touch(t, dir, f)
 			}
-			// Pass the full seed env so ${COMPOSE_ENV} interpolates.
-			env := []string{"COMPOSE_ENV=prod"}
+			// Pass the full seed env so ${CENVKIT_ENV} interpolates.
+			env := []string{"CENVKIT_ENV=prod"}
 			if tc.cfEnv != "" {
 				env = append(env, "COMPOSE_FILE="+tc.cfEnv)
 			}

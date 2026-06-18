@@ -29,14 +29,14 @@ import (
 //   - er.EnvFiles is non-empty (engine enumerates Layer-2)
 //   - Layer-2 service files (.web.env, .api.env, .reports.env) are in er.EnvFiles
 //   - All Layer-2 paths are absolute
-//   - COMPOSE_ENV in cr.Vars is "dev" (chain→engine hand-off seam)
+//   - CENVKIT_ENV in cr.Vars is "dev" (chain→engine hand-off seam)
 func TestSeam_ChainToEngine_EnumerationContract(t *testing.T) {
 	root := stageMonorepo(t)
 
 	// Step 1: Layer-1 chain (pure Go, no compose-go)
 	cr, err := chain.Resolve(chain.Input{
 		ProjectDir: root,
-		OSEnv:      []string{"COMPOSE_ENV=dev", "HOSTNAME=testhost"},
+		OSEnv:      []string{"CENVKIT_ENV=dev", "HOSTNAME=testhost"},
 		Hostname:   func() (string, error) { return "testhost", nil },
 	})
 	if err != nil {
@@ -75,18 +75,18 @@ func TestSeam_ChainToEngine_EnumerationContract(t *testing.T) {
 		}
 	}
 
-	// COMPOSE_ENV in cr.Vars must be "dev" (chain resolved it correctly)
+	// CENVKIT_ENV in cr.Vars must be "dev" (chain resolved it correctly)
 	composeEnvInVars := false
 	for _, kv := range cr.Vars {
-		if strings.HasPrefix(kv, "COMPOSE_ENV=") {
-			if kv != "COMPOSE_ENV=dev" {
-				t.Fatalf("cr.Vars COMPOSE_ENV=%q want dev", strings.TrimPrefix(kv, "COMPOSE_ENV="))
+		if strings.HasPrefix(kv, "CENVKIT_ENV=") {
+			if kv != "CENVKIT_ENV=dev" {
+				t.Fatalf("cr.Vars CENVKIT_ENV=%q want dev", strings.TrimPrefix(kv, "CENVKIT_ENV="))
 			}
 			composeEnvInVars = true
 		}
 	}
 	if !composeEnvInVars {
-		t.Fatal("COMPOSE_ENV not found in cr.Vars (seam: chain must emit it)")
+		t.Fatal("CENVKIT_ENV not found in cr.Vars (seam: chain must emit it)")
 	}
 }
 
@@ -99,7 +99,7 @@ func TestSeam_RunPath_L1Only(t *testing.T) {
 
 	cr, err := chain.Resolve(chain.Input{
 		ProjectDir: root,
-		OSEnv:      []string{"COMPOSE_ENV=dev", "HOSTNAME=testhost"},
+		OSEnv:      []string{"CENVKIT_ENV=dev", "HOSTNAME=testhost"},
 		Hostname:   func() (string, error) { return "testhost", nil },
 	})
 	if err != nil {

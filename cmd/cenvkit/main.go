@@ -116,7 +116,7 @@ func resolveProjectDir(cmd *cobra.Command) (string, error) {
 // engine.Resolve entirely (D1: faster compose/env-files; the engine's Layer-2
 // enumeration now lives only in env-debug as a gap-detector).
 //
-// envOverlay entries (e.g. "COMPOSE_ENV=prod") are appended AFTER os.Environ() so
+// envOverlay entries (e.g. "CENVKIT_ENV=prod") are appended AFTER os.Environ() so
 // they win via chain's osEnvMap last-wins — this is how `validate --all` re-resolves
 // the Layer-1 chain per env (findings [3]/[9]).
 func assemble(cmd *cobra.Command, envOverlay ...string) ([]string, chain.Result, error) {
@@ -141,7 +141,7 @@ func assemble(cmd *cobra.Command, envOverlay ...string) ([]string, chain.Result,
 // overlay), resolve the Layer-1 chain for THAT env, and flatten it into a merged
 // shell-wins environment via internal/envmap.
 //
-// The `-e` overlay is a "COMPOSE_ENV=<v>" entry appended AFTER os.Environ() so it
+// The `-e` overlay is a "CENVKIT_ENV=<v>" entry appended AFTER os.Environ() so it
 // wins via chain's osEnvMap last-wins (the same mechanism `validate --all` uses,
 // see newValidateCmd). It feeds BOTH the chain selection (which `.${ENV}.env` is
 // picked) AND the flatten base, so the two stay consistent. expand toggles
@@ -153,7 +153,7 @@ func resolvePopulator(cmd *cobra.Command, env string, expand bool) (envmap.Resol
 	}
 	osEnv := os.Environ()
 	if env != "" {
-		osEnv = append(osEnv, "COMPOSE_ENV="+env) // re-resolve the chain for this env; wins (last)
+		osEnv = append(osEnv, "CENVKIT_ENV="+env) // re-resolve the chain for this env; wins (last)
 	}
 	cr, err := chain.Resolve(chain.Input{ProjectDir: dir, OSEnv: osEnv, Hostname: os.Hostname})
 	if err != nil {
@@ -285,7 +285,7 @@ func newValidateCmd() *cobra.Command {
 			run := func(env string) error {
 				var ov []string
 				if env != "" {
-					ov = []string{"COMPOSE_ENV=" + env} // re-resolve the Layer-1 chain for THIS env
+					ov = []string{"CENVKIT_ENV=" + env} // re-resolve the Layer-1 chain for THIS env
 				}
 				merged, _, err := assemble(cmd, ov...)
 				if err != nil {
@@ -299,7 +299,7 @@ func newValidateCmd() *cobra.Command {
 				dc.Dir = dir
 				dc.Env = append(os.Environ(), "COMPOSE_ENV_FILES="+envfiles.Join(merged))
 				if env != "" {
-					dc.Env = append(dc.Env, "COMPOSE_ENV="+env) // also render ${COMPOSE_ENV} in compose files
+					dc.Env = append(dc.Env, "CENVKIT_ENV="+env) // also render ${CENVKIT_ENV} in compose files
 				}
 				dc.Stdout, dc.Stderr = os.Stdout, os.Stderr
 				if err := dc.Run(); err != nil {
@@ -495,7 +495,7 @@ func newEnvCmd() *cobra.Command {
 			return envmap.Emit(cmd.OutOrStdout(), res, f)
 		},
 	}
-	c.Flags().StringVarP(&envSel, "env", "e", "", "select the chain env (overrides COMPOSE_ENV); e.g. -e prod")
+	c.Flags().StringVarP(&envSel, "env", "e", "", "select the chain env (overrides CENVKIT_ENV); e.g. -e prod")
 	c.Flags().Bool("expand", true, "expand ${VAR} in chain values (default)")
 	c.Flags().BoolVar(&noExpand, "no-expand", false, "emit chain values literally, leaving ${VAR} unexpanded")
 	c.MarkFlagsMutuallyExclusive("expand", "no-expand")
@@ -540,7 +540,7 @@ func newRunCmd() *cobra.Command {
 			return execChild(args, res.Full)
 		},
 	}
-	c.Flags().StringVarP(&envSel, "env", "e", "", "select the chain env (overrides COMPOSE_ENV); e.g. -e prod")
+	c.Flags().StringVarP(&envSel, "env", "e", "", "select the chain env (overrides CENVKIT_ENV); e.g. -e prod")
 	c.Flags().Bool("expand", true, "expand ${VAR} in chain values (default)")
 	c.Flags().BoolVar(&noExpand, "no-expand", false, "emit chain values literally, leaving ${VAR} unexpanded")
 	c.MarkFlagsMutuallyExclusive("expand", "no-expand")

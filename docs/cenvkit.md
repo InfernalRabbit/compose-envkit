@@ -50,9 +50,9 @@ to `[A-Za-z0-9._-]`).
 
 ## How it works
 
-1. **Layer 1 — the chain** (`internal/chain`, pure Go). Reads `.docker-env-chain`
-   (or the default `.env → .${COMPOSE_ENV}.env → .secrets.env`), substitutes
-   `${ENV}`/`${COMPOSE_ENV}`/`${HOST}`/`${HOSTNAME}` (sanitized), keeps the files
+1. **Layer 1 — the chain** (`internal/chain`, pure Go). Reads `.cenvkit.envchain`
+   (or the default `.env → .${CENVKIT_ENV}.env → .secrets.env`), substitutes
+   `${ENV}`/`${CENVKIT_ENV}`/`${HOST}`/`${HOSTNAME}` (sanitized), keeps the files
    that exist. **This — and only this — is `COMPOSE_ENV_FILES` for the run**: the
    interpolation context.
 2. **Service `env_file:` enumeration** (`internal/engine`, the only package
@@ -155,8 +155,8 @@ reports a resolution the real run won't produce. Provenance uses compose-go's ow
   no longer feeds interpolation, it can **no longer clobber a chain/secret var at
   interpolation time**. (At runtime each `env_file:` applies only to its own
   container, natively.)
-- **`COMPOSE_FILE` overlays** like `docker-compose.yml:docker-compose.${COMPOSE_ENV}.yml`
-  work: cenvkit interpolates `${COMPOSE_ENV}`/`${ENV}` and splits on
+- **`COMPOSE_FILE` overlays** like `docker-compose.yml:docker-compose.${CENVKIT_ENV}.yml`
+  work: cenvkit interpolates `${CENVKIT_ENV}`/`${ENV}` and splits on
   `COMPOSE_PATH_SEPARATOR` (else the OS path-list separator; never `,`).
 - **`COMPOSE_DEPTH`** is accepted-but-ignored (the `include:` graph makes
   depth-bounded glob discovery obsolete). **No over-discovery** — a compose file
@@ -164,9 +164,9 @@ reports a resolution the real run won't produce. Provenance uses compose-go's ow
 
 ## Configuration
 
-- `.docker-env-chain` — the Layer-1 chain (one path template per line; `#`
+- `.cenvkit.envchain` — the Layer-1 chain (one path template per line; `#`
   comments and blank lines ignored). Back-compatible with the sh kit's format.
-- `COMPOSE_ENV` — selects the env tier (shell > `.env`'s `COMPOSE_ENV=` > `dev`).
+- `CENVKIT_ENV` — selects the env tier (shell > `.env`'s `CENVKIT_ENV=` > `dev`).
 - `COMPOSE_FILE`, `COMPOSE_PROFILES`, `HOSTNAME`/`HOST` — honored as above.
 
 ## Architecture / contributing

@@ -51,7 +51,7 @@ services:
     ports:
       - "${WEB_PORT}:80"
     environment:
-      TIER: "${COMPOSE_ENV}"
+      TIER: "${CENVKIT_ENV}"
     env_file:
       - ./web.env
 `)
@@ -59,7 +59,7 @@ services:
 	// Under v3 the interpolation mapping is Layer-1-only, so WEB_PORT is a gap var:
 	// ${WEB_PORT} falls back, Effect.Resolved is the fallback, Gap=true.
 	web := writeF(t, dir, "web.env", "WEB_ONLY=yes\nTIER=fromfile\nWEB_PORT=8080\n")
-	env := []string{"COMPOSE_ENV=staging"}
+	env := []string{"CENVKIT_ENV=staging"}
 
 	rep, err := engine.New().Provenance(context.Background(), engine.ProvInput{
 		ProjectDir: dir,
@@ -116,7 +116,7 @@ services:
 // This is the D-A gate: existing modes' --json output must remain byte-identical.
 func TestProvenance_WantLayers_GateOff(t *testing.T) {
 	dir := t.TempDir()
-	envFile := writeF(t, dir, "chain.env", "SITE_URL=example.com\nCOMPOSE_ENV=dev\n")
+	envFile := writeF(t, dir, "chain.env", "SITE_URL=example.com\nCENVKIT_ENV=dev\n")
 	writeF(t, dir, "compose.yaml", `
 services:
   web:
@@ -131,7 +131,7 @@ services:
 
 	rep, err := engine.New().Provenance(context.Background(), engine.ProvInput{
 		ProjectDir: dir,
-		Env:        []string{"COMPOSE_ENV=dev"},
+		Env:        []string{"CENVKIT_ENV=dev"},
 		EnvFiles:   []engine.ProvFile{{Path: envFile, Layer: "layer1"}},
 		WantLayers: false, // explicit default
 	})
@@ -170,7 +170,7 @@ services:
 
 	rep, err := engine.New().Provenance(context.Background(), engine.ProvInput{
 		ProjectDir: dir,
-		Env:        []string{"COMPOSE_ENV=dev"},
+		Env:        []string{"CENVKIT_ENV=dev"},
 		EnvFiles: []engine.ProvFile{
 			{Path: envFile, Layer: "layer1"},
 			{Path: devEnvFile, Layer: "layer1"},

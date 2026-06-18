@@ -12,7 +12,7 @@
 //	G1/G2: stray files not in include:/COMPOSE_FILE NOT discovered (was: glob found them)
 //	G3:    COMPOSE_DEPTH accepted-but-ignored; out-of-include = not-found
 //	G4:    no fallback shim — chain-only mode succeeds with empty Layer-2
-//	G5:    install layout differs (no scripts/); cenvkit binary + .docker-env-chain
+//	G5:    install layout differs (no scripts/); cenvkit binary + .cenvkit.envchain
 //
 // v3 behavior inversions vs v1/v2 (Layer-2 becomes debug-only):
 //
@@ -43,14 +43,47 @@
 package acceptance
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// ─── stale-count guard ────────────────────────────────────────────────────────
+//
+// declaredAssertions is the SINGLE source of truth for the total assertion count.
+// The file-header comment (line 2) is kept in sync by TestAssertionCountHeader
+// below — if you bump one, the test forces you to bump the other.
+// This replaces the recurring manual "133 total" / "131 count" drift class.
+const declaredAssertions = 128
+
+// TestAssertionCountHeader verifies that the file-header "Current assertion count: N"
+// comment on line 2 matches the declaredAssertions const above.
+// A mismatch means one was bumped without the other — fix them together.
+func TestAssertionCountHeader(t *testing.T) {
+	f, err := os.Open("cenvkit-acceptance_test.go")
+	if err != nil {
+		t.Fatalf("open self: %v", err)
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	var line2 string
+	for i := 0; sc.Scan(); i++ {
+		if i == 1 { // 0-indexed: line 2
+			line2 = sc.Text()
+			break
+		}
+	}
+	want := fmt.Sprintf("// cenvkit binary directly. Current assertion count: %d.", declaredAssertions)
+	if line2 != want {
+		t.Fatalf("stale-count mismatch:\n  header line 2: %q\n  want:          %q\n\nBump BOTH declaredAssertions const AND the line-2 comment together.", line2, want)
+	}
+}
 
 // ─── harness ──────────────────────────────────────────────────────────────────
 
@@ -139,8 +172,8 @@ func TestScenario1_Init(t *testing.T) {
 	}
 	// 1.3 — .env must not be clobbered (already seeded by stageMonorepo)
 	b, _ := os.ReadFile(filepath.Join(root, ".env"))
-	if !strings.Contains(string(b), "COMPOSE_ENV=dev") {
-		t.Fatalf("[1.3] .env clobbered or missing COMPOSE_ENV=dev")
+	if !strings.Contains(string(b), "CENVKIT_ENV=dev") {
+		t.Fatalf("[1.3] .env clobbered or missing CENVKIT_ENV=dev")
 	}
 	// second run must also exit 0 (idempotent)
 	if out, err := runCenvkit(t, root, nil, "init"); err != nil {
@@ -192,13 +225,13 @@ func TestScenario6_ApiDirIsolation(t *testing.T) {
 	}
 }
 
-// ─── Scenario 8: COMPOSE_ENV=prod (1 assertion, no docker) ───────────────────
+// ─── Scenario 8: CENVKIT_ENV=prod (1 assertion, no docker) ───────────────────
 
 // v3 INVERSION (V1): run path is Layer-1 only.
 // 8.1 prod: service env_file: paths absent from env-files output (was: present in v1/v2)
 func TestScenario8_ProdEnvFiles(t *testing.T) {
 	root := stageMonorepo(t)
-	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=prod"}, "env-files")
+	out, err := runCenvkit(t, root, []string{"CENVKIT_ENV=prod"}, "env-files")
 	if err != nil {
 		t.Fatalf("[8] env-files prod: %v\n%s", err, out)
 	}
@@ -348,9 +381,9 @@ func TestScenario12_HostOverrides(t *testing.T) {
 func TestScenario13_HostToken(t *testing.T) {
 	root := stageMonorepo(t)
 	os.WriteFile(filepath.Join(root, ".testhost.env"), []byte("H=1\n"), 0o644)
-	// .docker-env-chain already uses ${HOSTNAME}; create a parallel chain using ${HOST}
+	// .cenvkit.envchain already uses ${HOSTNAME}; create a parallel chain using ${HOST}
 	hostDir := t.TempDir()
-	os.WriteFile(filepath.Join(hostDir, ".docker-env-chain"), []byte(".env\n.${HOST}.env\n"), 0o644)
+	os.WriteFile(filepath.Join(hostDir, ".cenvkit.envchain"), []byte(".env\n.${HOST}.env\n"), 0o644)
 	os.WriteFile(filepath.Join(hostDir, ".env"), []byte("B=1\n"), 0o644)
 	os.WriteFile(filepath.Join(hostDir, ".testhost.env"), []byte("H=1\n"), 0o644)
 
@@ -392,7 +425,7 @@ func TestScenario16_PerServiceEnvTier(t *testing.T) {
 	root := stageMonorepo(t)
 
 	// 16.1 dev — per-service runtime env must include the dev tier file
-	devOut, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--effective", "--service", "web")
+	devOut, err := runCenvkit(t, root, []string{"CENVKIT_ENV=dev"}, "env-debug", "--effective", "--service", "web")
 	if err != nil {
 		t.Fatalf("[16] env-debug --effective --service web dev: %v\n%s", err, devOut)
 	}
@@ -401,7 +434,7 @@ func TestScenario16_PerServiceEnvTier(t *testing.T) {
 	}
 
 	// 16.2 prod: .web.prod.env present, .web.dev.env absent
-	prodOut, err := runCenvkit(t, root, []string{"COMPOSE_ENV=prod"}, "env-debug", "--effective", "--service", "web")
+	prodOut, err := runCenvkit(t, root, []string{"CENVKIT_ENV=prod"}, "env-debug", "--effective", "--service", "web")
 	if err != nil {
 		t.Fatalf("[16] env-debug --effective --service web prod: %v\n%s", err, prodOut)
 	}
@@ -421,7 +454,7 @@ func TestScenario17_RootEnvTier(t *testing.T) {
 	root := stageMonorepo(t)
 
 	// 17.1 dev
-	devOut, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-files")
+	devOut, err := runCenvkit(t, root, []string{"CENVKIT_ENV=dev"}, "env-files")
 	if err != nil {
 		t.Fatalf("[17] env-files dev: %v\n%s", err, devOut)
 	}
@@ -433,7 +466,7 @@ func TestScenario17_RootEnvTier(t *testing.T) {
 	}
 
 	// 17.2 prod
-	prodOut, err := runCenvkit(t, root, []string{"COMPOSE_ENV=prod"}, "env-files")
+	prodOut, err := runCenvkit(t, root, []string{"CENVKIT_ENV=prod"}, "env-files")
 	if err != nil {
 		t.Fatalf("[17] env-files prod: %v\n%s", err, prodOut)
 	}
@@ -529,7 +562,7 @@ services:
 // 23.2 sanitized host resolves .evlhost.env
 func TestScenario23_HostSanitization(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".docker-env-chain"), []byte(".env\n.${HOSTNAME}.env\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.${HOSTNAME}.env\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("BASE=1\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".evlhost.env"), []byte("H=1\n"), 0o644)
 
@@ -576,13 +609,13 @@ func TestEnvDebug_ValueUnset(t *testing.T) {
 // reports the Layer-1 interpolation winner; a var defined only in a service
 // env_file: has no Layer-1 winner → empty). Contrast: a chain var returns its value.
 // RED on a hypothetical impl that leaks service env_file: values into --value output.
-// Uses the staged monorepo: WEB_PORT is env_file-only (web/.web.env); COMPOSE_ENV is
+// Uses the staged monorepo: WEB_PORT is env_file-only (web/.web.env); CENVKIT_ENV is
 // a chain var (.env sets it to "dev"). (2 assertions)
 func TestEnvDebug_Value_EnvFileOnly_Empty(t *testing.T) {
 	root := stageMonorepo(t)
 
 	// corrected-C1a: env_file-only var → empty output (NOT "18080" or "0")
-	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--value", "--var", "WEB_PORT")
+	out, err := runCenvkit(t, root, []string{"CENVKIT_ENV=dev"}, "env-debug", "--value", "--var", "WEB_PORT")
 	if err != nil {
 		t.Fatalf("[C1a] --value --var WEB_PORT: %v\n%s", err, out)
 	}
@@ -590,13 +623,13 @@ func TestEnvDebug_Value_EnvFileOnly_Empty(t *testing.T) {
 		t.Fatalf("[C1a] --value --var WEB_PORT = %q, want empty (env_file-only var has no Layer-1 winner)", trimmed)
 	}
 
-	// corrected-C1b: chain var → non-empty value (COMPOSE_ENV is set in .env)
-	out2, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--value", "--var", "COMPOSE_ENV")
+	// corrected-C1b: chain var → non-empty value (CENVKIT_ENV is set in .env)
+	out2, err := runCenvkit(t, root, []string{"CENVKIT_ENV=dev"}, "env-debug", "--value", "--var", "CENVKIT_ENV")
 	if err != nil {
-		t.Fatalf("[C1b] --value --var COMPOSE_ENV: %v\n%s", err, out2)
+		t.Fatalf("[C1b] --value --var CENVKIT_ENV: %v\n%s", err, out2)
 	}
 	if trimmed := strings.TrimSpace(out2); trimmed == "" {
-		t.Fatalf("[C1b] --value --var COMPOSE_ENV must be non-empty (chain var)")
+		t.Fatalf("[C1b] --value --var CENVKIT_ENV must be non-empty (chain var)")
 	}
 }
 
@@ -630,7 +663,7 @@ func TestEnvDebug_FilesExitsZero(t *testing.T) {
 
 // ─── G5: install layout (smoke.sh [2]) ───────────────────────────────────────
 
-// G5: Go install layout — cenvkit binary is executable; .docker-env-chain back-compat.
+// G5: Go install layout — cenvkit binary is executable; .cenvkit.envchain back-compat.
 func TestScenario_G5_InstallLayout(t *testing.T) {
 	// cenvkitBin was built in TestMain — assert it is executable
 	fi, err := os.Stat(cenvkitBin)
@@ -745,7 +778,7 @@ func TestScenario3_CrossSubprojectPorts(t *testing.T) {
 	}
 }
 
-// Scenario 15: dev/prod overlay via COMPOSE_FILE ${COMPOSE_ENV}
+// Scenario 15: dev/prod overlay via COMPOSE_FILE ${CENVKIT_ENV}
 // 15.1 dev: STACK_TIER=dev from overlay
 // 15.2 prod: STACK_TIER=prod from overlay
 func TestScenario15_DevProdOverlay(t *testing.T) {
@@ -754,7 +787,7 @@ func TestScenario15_DevProdOverlay(t *testing.T) {
 	}
 	root := stageMonorepo(t)
 
-	devOut, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "compose", "config")
+	devOut, err := runCenvkit(t, root, []string{"CENVKIT_ENV=dev"}, "compose", "config")
 	if err != nil {
 		t.Fatalf("[15] compose config dev: %v\n%s", err, devOut)
 	}
@@ -762,7 +795,7 @@ func TestScenario15_DevProdOverlay(t *testing.T) {
 		t.Fatalf("[15.1] STACK_TIER=dev not in dev config:\n%s", devOut)
 	}
 
-	prodOut, err := runCenvkit(t, root, []string{"COMPOSE_ENV=prod"}, "compose", "config")
+	prodOut, err := runCenvkit(t, root, []string{"CENVKIT_ENV=prod"}, "compose", "config")
 	if err != nil {
 		t.Fatalf("[15] compose config prod: %v\n%s", err, prodOut)
 	}
@@ -780,7 +813,7 @@ func TestScenario17_IsDevFlag(t *testing.T) {
 	}
 	root := stageMonorepo(t)
 
-	devOut, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "compose", "config")
+	devOut, err := runCenvkit(t, root, []string{"CENVKIT_ENV=dev"}, "compose", "config")
 	if err != nil {
 		t.Fatalf("[17.3] compose config dev: %v\n%s", err, devOut)
 	}
@@ -788,7 +821,7 @@ func TestScenario17_IsDevFlag(t *testing.T) {
 		t.Fatalf("[17.3] IS_DEV=true not in dev config:\n%s", devOut)
 	}
 
-	prodOut, err := runCenvkit(t, root, []string{"COMPOSE_ENV=prod"}, "compose", "config")
+	prodOut, err := runCenvkit(t, root, []string{"CENVKIT_ENV=prod"}, "compose", "config")
 	if err != nil {
 		t.Fatalf("[17.4] compose config prod: %v\n%s", err, prodOut)
 	}
@@ -853,7 +886,7 @@ func TestW3_SecretsLastValueLevel(t *testing.T) {
 		t.Skip("SMOKE_SKIP_DOCKER=1")
 	}
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".docker-env-chain"), []byte(".env\n.secrets.env\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.secrets.env\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("API_TOKEN=base-val\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".secrets.env"), []byte("API_TOKEN=secret-real\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(`
@@ -986,7 +1019,7 @@ func TestProvenance_GapValue_RenderOnlyStrip(t *testing.T) {
 
 	// strip-1: human --trace shows the stripped form: `resolves to "0"`
 	// (not `resolves to "WEB_PORT=0"`)
-	outHuman, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--trace", "--var", "WEB_PORT")
+	outHuman, err := runCenvkit(t, root, []string{"CENVKIT_ENV=dev"}, "env-debug", "--trace", "--var", "WEB_PORT")
 	if err != nil {
 		t.Fatalf("[strip-1] --trace --var WEB_PORT: %v\n%s", err, outHuman)
 	}
@@ -995,7 +1028,7 @@ func TestProvenance_GapValue_RenderOnlyStrip(t *testing.T) {
 	}
 
 	// strip-2: --json keeps the raw "WEB_PORT=0" in effects[].resolved (render-only strip)
-	outJSON, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--trace", "--var", "WEB_PORT", "--json")
+	outJSON, err := runCenvkit(t, root, []string{"CENVKIT_ENV=dev"}, "env-debug", "--trace", "--var", "WEB_PORT", "--json")
 	if err != nil {
 		t.Fatalf("[strip-2] --trace --var WEB_PORT --json: %v\n%s", err, outJSON)
 	}
@@ -1017,11 +1050,11 @@ func TestProvenance_GapValue_RenderOnlyStrip(t *testing.T) {
 
 // [#12 FIX 3] empty-chain hint in --overview acceptance: a project with no
 // Layer-1 chain files emits the hint in the Interpolation chain section.
-// Uses a scratch fixture (no .env, no .docker-env-chain, one service env_file:).
+// Uses a scratch fixture (no .env, no .cenvkit.envchain, one service env_file:).
 // (1 assertion)
 func TestEnvDebug_Overview_EmptyChainHint(t *testing.T) {
 	dir := t.TempDir()
-	// no .env and no .docker-env-chain → empty Layer-1 chain
+	// no .env and no .cenvkit.envchain → empty Layer-1 chain
 	os.MkdirAll(filepath.Join(dir, "web"), 0o755)
 	os.WriteFile(filepath.Join(dir, "web", ".web.env"), []byte("WEB_PORT=18080\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  web:\n    image: busybox\n    env_file: [web/.web.env]\n"), 0o644)
@@ -1166,7 +1199,7 @@ services:
 // (1 assertion)
 func TestProvenance_W3_SecretsLast_TraceWinner(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".docker-env-chain"), []byte(".env\n.secrets.env\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.secrets.env\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("API_TOKEN=base-val\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".secrets.env"), []byte("API_TOKEN=secret-real\n"), 0o644)
 
@@ -1318,8 +1351,8 @@ services:
 // Daemon-free: no compose file needed for the chain-only overview path.
 func TestOverview_ChainMarkers(t *testing.T) {
 	dir := t.TempDir()
-	// .docker-env-chain with two files
-	os.WriteFile(filepath.Join(dir, ".docker-env-chain"), []byte(".env\n.dev.env\n"), 0o644)
+	// .cenvkit.envchain with two files
+	os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.dev.env\n"), 0o644)
 	// .env: defines SITE_URL (will be overridden) and BASE_KEY (new, not overridden)
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\nBASE_KEY=base\n"), 0o644)
 	// .dev.env: overrides SITE_URL (~) and adds IS_DEV (+)
@@ -1354,7 +1387,7 @@ func TestOverview_ChainMarkers(t *testing.T) {
 // SERVICE dotfiles like web/.web.env are git-tracked and present after cp -R).
 func TestOverview_RuntimeWebLayer(t *testing.T) {
 	root := stageMonorepo(t)
-	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--overview")
+	out, err := runCenvkit(t, root, []string{"CENVKIT_ENV=dev"}, "env-debug", "--overview")
 	if err != nil {
 		t.Fatalf("[overview-2] env-debug --overview: %v\n%s", err, out)
 	}
@@ -1379,7 +1412,7 @@ func TestOverview_RuntimeWebLayer(t *testing.T) {
 // (SF-2: no seeding needed — service dotfiles are tracked, unlike root dotfiles).
 func TestOverview_WEBPORTGap(t *testing.T) {
 	root := stageMonorepo(t)
-	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--overview")
+	out, err := runCenvkit(t, root, []string{"CENVKIT_ENV=dev"}, "env-debug", "--overview")
 	if err != nil {
 		t.Fatalf("[overview-3] env-debug --overview: %v\n%s", err, out)
 	}
@@ -1400,7 +1433,7 @@ func TestOverview_WEBPORTGap(t *testing.T) {
 // actual monorepo files, not just the scratch-fixture overview-1 test.
 func TestOverview_ChainOverrideOnMonorepo(t *testing.T) {
 	root := stageMonorepo(t)
-	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--overview")
+	out, err := runCenvkit(t, root, []string{"CENVKIT_ENV=dev"}, "env-debug", "--overview")
 	if err != nil {
 		t.Fatalf("[overview-4] env-debug --overview: %v\n%s", err, out)
 	}
@@ -1454,7 +1487,7 @@ services:
 // which is empty for WEB_PORT (not in chain); the compose-resolved fallback "0"
 // is only visible via --trace --json. See TestEnvDebug_Value_EnvFileOnly_Empty.
 
-// [A] validate positive (docker-gated): staged monorepo, COMPOSE_ENV=dev →
+// [A] validate positive (docker-gated): staged monorepo, CENVKIT_ENV=dev →
 // exits 0 + stdout contains "config valid". (2 assertions: exit 0 + message)
 // [A-neg] validate negative: scratch dir w/ invalid root docker-compose.yml →
 // exits non-zero + stderr non-empty. Uses runCenvkitSplit.
@@ -1463,9 +1496,9 @@ func TestValidate_Positive(t *testing.T) {
 		t.Skip("SMOKE_SKIP_DOCKER=1")
 	}
 	root := stageMonorepo(t)
-	stdout, stderr, err := runCenvkitSplit(t, root, []string{"COMPOSE_ENV=dev"}, "validate")
+	stdout, stderr, err := runCenvkitSplit(t, root, []string{"CENVKIT_ENV=dev"}, "validate")
 	if err != nil {
-		t.Fatalf("[A-pos] validate COMPOSE_ENV=dev: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		t.Fatalf("[A-pos] validate CENVKIT_ENV=dev: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
 	}
 	// A-pos-1: exit 0 — already confirmed by err==nil
 	// A-pos-2: stdout must contain "config valid"
@@ -1521,7 +1554,7 @@ func TestValidate_All(t *testing.T) {
 // (7 assertions)
 func TestEnvDebug_Files_TwoGroup(t *testing.T) {
 	root := stageMonorepo(t)
-	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--files")
+	out, err := runCenvkit(t, root, []string{"CENVKIT_ENV=dev"}, "env-debug", "--files")
 	if err != nil {
 		t.Fatalf("[B] env-debug --files: %v\n%s", err, out)
 	}
@@ -1545,7 +1578,7 @@ func TestEnvDebug_Files_TwoGroup(t *testing.T) {
 	if !strings.Contains(out, ".web.env") {
 		t.Fatalf("[B-5] expected .web.env in web service block:\n%s", out)
 	}
-	// B-6: .web.dev.env also appears under web (COMPOSE_ENV=dev tier)
+	// B-6: .web.dev.env also appears under web (CENVKIT_ENV=dev tier)
 	if !strings.Contains(out, ".web.dev.env") {
 		t.Fatalf("[B-6] expected .web.dev.env in web service block (dev tier):\n%s", out)
 	}
@@ -1564,7 +1597,7 @@ func TestEnvDebug_Files_TwoGroup(t *testing.T) {
 // ending ".web.env". (4 assertions)
 func TestEnvDebug_Files_JSON_L1Only(t *testing.T) {
 	root := stageMonorepo(t)
-	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--files", "--json")
+	out, err := runCenvkit(t, root, []string{"CENVKIT_ENV=dev"}, "env-debug", "--files", "--json")
 	if err != nil {
 		t.Fatalf("[B2-files] env-debug --files --json: %v\n%s", err, out)
 	}
@@ -1621,7 +1654,7 @@ func TestEnvDebug_Files_JSON_L1Only(t *testing.T) {
 // a runtime line whose absolute path ends "services/reports/.reports.env". (2 assertions)
 func TestEnvDebug_Trace_REPORTS_PORT_DeepGap(t *testing.T) {
 	root := stageMonorepo(t)
-	out, err := runCenvkit(t, root, []string{"COMPOSE_ENV=dev"}, "env-debug", "--trace", "--var", "REPORTS_PORT")
+	out, err := runCenvkit(t, root, []string{"CENVKIT_ENV=dev"}, "env-debug", "--trace", "--var", "REPORTS_PORT")
 	if err != nil {
 		t.Fatalf("[C2] env-debug --trace --var REPORTS_PORT: %v\n%s", err, out)
 	}
@@ -1635,7 +1668,7 @@ func TestEnvDebug_Trace_REPORTS_PORT_DeepGap(t *testing.T) {
 	}
 }
 
-// [D1] Default chain fallback — no .docker-env-chain: three standard files
+// [D1] Default chain fallback — no .cenvkit.envchain: three standard files
 // (.env, .dev.env, .secrets.env) present → env-files lists them in order. (3 assertions)
 func TestChain_DefaultFallback(t *testing.T) {
 	dir := t.TempDir()
@@ -1643,7 +1676,7 @@ func TestChain_DefaultFallback(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, ".dev.env"), []byte("TIER=1\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".secrets.env"), []byte("S=1\n"), 0o644)
 
-	out, err := runCenvkit(t, dir, []string{"COMPOSE_ENV=dev"}, "env-files")
+	out, err := runCenvkit(t, dir, []string{"CENVKIT_ENV=dev"}, "env-files")
 	if err != nil {
 		t.Fatalf("[D1] env-files (default chain): %v\n%s", err, out)
 	}
@@ -1662,12 +1695,12 @@ func TestChain_DefaultFallback(t *testing.T) {
 	}
 }
 
-// [D2] Named-missing chain file skipped (scratch): .docker-env-chain lists
+// [D2] Named-missing chain file skipped (scratch): .cenvkit.envchain lists
 // .env, .missing.env, .secrets.env; only .env + .secrets.env exist → env-files
 // lists only those two; .missing.env absent; exits 0. (3 assertions)
 func TestChain_MissingFileSkipped(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".docker-env-chain"), []byte(".env\n.missing.env\n.secrets.env\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.missing.env\n.secrets.env\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".secrets.env"), []byte("S=1\n"), 0o644)
 	// .missing.env intentionally NOT created
@@ -1697,18 +1730,18 @@ func TestChain_MissingFileSkipped(t *testing.T) {
 	}
 }
 
-// [D3] ${COMPOSE_ENV} root-chain alias (scratch): .docker-env-chain uses
-// .${COMPOSE_ENV}.env token; COMPOSE_ENV=test; .test.env exists → env-files
+// [D3] ${CENVKIT_ENV} root-chain token (scratch): .cenvkit.envchain uses
+// .${CENVKIT_ENV}.env token; CENVKIT_ENV=test; .test.env exists → env-files
 // includes abs path ending ".test.env". (1 assertion)
 func TestChain_ComposeEnvToken(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".docker-env-chain"), []byte(".env\n.${COMPOSE_ENV}.env\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.${CENVKIT_ENV}.env\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("A=1\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".test.env"), []byte("T=1\n"), 0o644)
 
-	out, err := runCenvkit(t, dir, []string{"COMPOSE_ENV=test"}, "env-files")
+	out, err := runCenvkit(t, dir, []string{"CENVKIT_ENV=test"}, "env-files")
 	if err != nil {
-		t.Fatalf("[D3] env-files COMPOSE_ENV=test: %v\n%s", err, out)
+		t.Fatalf("[D3] env-files CENVKIT_ENV=test: %v\n%s", err, out)
 	}
 	// D3-1: abs path ending ".test.env" must appear (token substituted)
 	if !strings.Contains(out, ".test.env") {
@@ -1828,7 +1861,7 @@ func gapExitCode(err error) int {
 // [C1-gap4] gap-report --json exits 1 + output contains "count": 1 and "var": "WEB_PORT".
 func TestGapReport_ExitCodeContract(t *testing.T) {
 	// These tests are daemon-free; run under SMOKE_SKIP_DOCKER=1 too.
-	cleanEnv := envWithout("COMPOSE_FILE", "COMPOSE_ENV_FILES", "COMPOSE_ENV", "WEB_PORT")
+	cleanEnv := envWithout("COMPOSE_FILE", "COMPOSE_ENV_FILES", "CENVKIT_ENV", "WEB_PORT")
 
 	// C1-gap1: seeded gap → exit 1
 	gapDir := writeGapAcceptFixture(t, false)
@@ -2049,9 +2082,9 @@ func TestParity_MF4_EnvEqualsEnvDebugEqualsCompose(t *testing.T) {
 		t.Skip("SMOKE_SKIP_DOCKER=1")
 	}
 	root := stageMonorepo(t)
-	// COMPOSE_ENV=dev selects the dev tier chain (.dev.env → IS_DEV=true).
-	pEnv := envWithout("SITE_URL", "IS_DEV", "COMPOSE_ENV", "WEB_PORT", "COMPOSE_FILE", "COMPOSE_ENV_FILES")
-	devEnv := append(pEnv, "COMPOSE_ENV=dev")
+	// CENVKIT_ENV=dev selects the dev tier chain (.dev.env → IS_DEV=true).
+	pEnv := envWithout("SITE_URL", "IS_DEV", "CENVKIT_ENV", "WEB_PORT", "COMPOSE_FILE", "COMPOSE_ENV_FILES")
+	devEnv := append(pEnv, "CENVKIT_ENV=dev")
 
 	// cenvkit env --format json (chain snapshot)
 	envOut, envErr := func() (string, error) {
@@ -2187,7 +2220,7 @@ func TestColor_NoLeak_NOCOLOR(t *testing.T) {
 // Uses a scratch fixture (not stageMonorepo) for speed.
 func TestColor_AlwaysFlag_OverviewHasANSI(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".docker-env-chain"), []byte(".env\n.dev.env\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".cenvkit.envchain"), []byte(".env\n.dev.env\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".env"), []byte("SITE_URL=example.com\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, ".dev.env"), []byte("IS_DEV=true\n"), 0o644)
 

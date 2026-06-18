@@ -15,15 +15,15 @@ Makefiles and no vendored wrapper scripts.
 examples/monorepo/
 ├── docker-compose.yml         # root: include:s web/ + api/, adds the shared network
 ├── docker-compose.dev.yml     # dev overlay  ┐ selected by COMPOSE_FILE's
-├── docker-compose.prod.yml    # prod overlay ┘ ${COMPOSE_ENV} token
-├── .docker-env-chain          # root Layer-1 chain (.env → .${ENV}.env → .${HOSTNAME}.env → .secrets.env)
+├── docker-compose.prod.yml    # prod overlay ┘ ${CENVKIT_ENV} token
+├── .cenvkit.envchain          # root Layer-1 chain (.env → .${ENV}.env → .${HOSTNAME}.env → .secrets.env)
 ├── example.env                # root non-secret defaults (cenvkit init → .env)
 ├── example.dev.env            # root dev tier (→ .dev.env);  IS_DEV=true
 ├── example.prod.env           # root prod tier (→ .prod.env); IS_DEV=false
 ├── web/
-│   ├── docker-compose.yml     # service `web`, env_file: [./.web.env, ./.web.${COMPOSE_ENV}.env]
+│   ├── docker-compose.yml     # service `web`, env_file: [./.web.env, ./.web.${CENVKIT_ENV}.env]
 │   ├── .web.env               # WEB_PORT=18080  (defined ONLY here, runtime-only)
-│   └── .web.dev.env / .web.prod.env   # per-service tier (WEB_DEBUG), by ${COMPOSE_ENV}
+│   └── .web.dev.env / .web.prod.env   # per-service tier (WEB_DEBUG), by ${CENVKIT_ENV}
 ├── api/
 │   ├── docker-compose.yml     # service `api`, env_file: [./.api.env], "${API_PORT:-0}:80"
 │   └── .api.env               # API_PORT=19090  (defined ONLY here, runtime-only)
@@ -42,7 +42,7 @@ examples/monorepo/
 
 | Layer | Populates | Feeds `${VAR}` interpolation? |
 |---|---|---|
-| Layer-1 chain (`COMPOSE_ENV_FILES`, `.docker-env-chain`) | root `.env`, `.dev.env`, `.secrets.env`, … | **yes** |
+| Layer-1 chain (`COMPOSE_ENV_FILES`, `.cenvkit.envchain`) | root `.env`, `.dev.env`, `.secrets.env`, … | **yes** |
 | Service `env_file:` (`web/.web.env`, `api/.api.env`, …) | each container's runtime env | **no** |
 
 `WEB_PORT=18080` lives only in `web/.web.env` — a service `env_file:`. At
@@ -158,12 +158,12 @@ wins over `env_file:`).
 
 ## dev / prod and per-machine overrides
 
-One `COMPOSE_ENV` knob (shell > `.env` > `dev`) drives the whole split:
+One `CENVKIT_ENV` knob (shell > `.env` > `dev`) drives the whole split:
 
 ```sh
 cenvkit init                 # seeds .dev.env / .prod.env from the templates
 
-COMPOSE_ENV=prod cenvkit compose config | grep STACK_TIER
+CENVKIT_ENV=prod cenvkit compose config | grep STACK_TIER
 #   STACK_TIER: prod      ← docker-compose.prod.yml overlay (COMPOSE_FILE selector)
 ```
 

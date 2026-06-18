@@ -20,13 +20,13 @@ func seedLookup(env []string, key string) string {
 	return ""
 }
 
-// interpolateComposeFile substitutes ${COMPOSE_ENV}/${ENV} (and any var present
+// interpolateComposeFile substitutes ${CENVKIT_ENV}/${ENV} (and any var present
 // in the seed env) into a COMPOSE_FILE entry. This mirrors the semantics
 // chain.substituteTokens applies in Layer-1 (replicated here because that helper
 // is unexported in package chain), so the gate and the loader interpolate alike.
 func interpolateComposeFile(entry string, env []string) string {
-	composeEnv := seedLookup(env, "COMPOSE_ENV")
-	r := strings.NewReplacer("${COMPOSE_ENV}", composeEnv, "${ENV}", composeEnv)
+	composeEnv := seedLookup(env, "CENVKIT_ENV")
+	r := strings.NewReplacer("${CENVKIT_ENV}", composeEnv, "${ENV}", composeEnv)
 	return r.Replace(entry)
 }
 
@@ -35,7 +35,7 @@ func interpolateComposeFile(entry string, env []string) string {
 // configs arg when in.ConfigFiles is empty) and the HasComposeFile* gate — so the
 // gate and the loader can never disagree.
 //
-// When COMPOSE_FILE is set it (a) interpolates ${COMPOSE_ENV}/${ENV}; (b) splits
+// When COMPOSE_FILE is set it (a) interpolates ${CENVKIT_ENV}/${ENV}; (b) splits
 // on COMPOSE_PATH_SEPARATOR-else-os.PathListSeparator (NEVER ',' — probe-verified
 // compose-go v2.11.0 never uses ','); (c) joins relative entries to absolute
 // against dir (NOT process cwd); (d) keeps only entries that exist on disk.
@@ -79,7 +79,7 @@ func resolveComposeFiles(dir string, env []string) []string {
 }
 
 // HasComposeFileEnv is the seam-correct gate: it takes the FULL seed env (the
-// chain's Vars) so ${COMPOSE_ENV} interpolation and COMPOSE_PATH_SEPARATOR are
+// chain's Vars) so ${CENVKIT_ENV} interpolation and COMPOSE_PATH_SEPARATOR are
 // honored, and shares resolveComposeFiles with Resolve so gate and loader cannot
 // drift. When false, callers skip Layer-2 entirely (chain-only mode, spec §13 G4).
 func HasComposeFileEnv(dir string, env []string) bool {
@@ -87,8 +87,8 @@ func HasComposeFileEnv(dir string, env []string) bool {
 }
 
 // HasComposeFile is the single-COMPOSE_FILE-value convenience form (still
-// interpolates ${COMPOSE_ENV} when the value carries it AND the caller seeds
-// COMPOSE_ENV — prefer HasComposeFileEnv from cmd code, which threads the full env).
+// interpolates ${CENVKIT_ENV} when the value carries it AND the caller seeds
+// CENVKIT_ENV — prefer HasComposeFileEnv from cmd code, which threads the full env).
 func HasComposeFile(dir, composeFileEnv string) bool {
 	if composeFileEnv != "" {
 		return HasComposeFileEnv(dir, []string{"COMPOSE_FILE=" + composeFileEnv})

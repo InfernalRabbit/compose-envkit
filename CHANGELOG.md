@@ -6,6 +6,39 @@ to [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+### Added — `cenvkit gap-report` (C1) and `cenvkit run` / `cenvkit env` (C2)
+
+- **`cenvkit gap-report`** — a daemon-free CI/pre-build lint over the existing gap
+  set: exits **1** when a `${VAR}` is satisfied only by a service `env_file:` (it
+  falls back at the run), **0** when clean, **2** when no compose file is found.
+  Stable `--json` (`{"gaps":[{var,service,field,fallback,fix}],"count":N}`). No
+  docker daemon required — runs before `docker build`.
+- **`cenvkit run -- <cmd>`** — populate the Layer-1 chain and exec a process with
+  the merged env (the no-docker local arm); shell-wins precedence; exit-code
+  fidelity (child code / **127** missing binary / **126** non-executable /
+  **128+signo** on signal). `--print` dumps the env without exec.
+- **`cenvkit env [--format dotenv|json|shell]`** — emit the merged Layer-1 env for
+  CI / scripts / `eval` (bounded to chain-derived keys, sorted, eval-safe quoting).
+- Both share **one expansion engine** (compose-go `dotenv`) with `env-debug`, so
+  `cenvkit env --expand` == `env-debug --effective` == `docker compose config`.
+  `--expand` is the default; `--no-expand` injects literal values.
+
+### Changed — chain rename to `.cenvkit.envchain` / `CENVKIT_ENV` (C3) ⚠ BREAKING
+
+**BREAKING (pre-1.0).** cenvkit's own chain file and selector are renamed, with
+**no back-compat aliases**:
+
+- chain file `.docker-env-chain` → **`.cenvkit.envchain`** (the old name is no
+  longer read).
+- selector `COMPOSE_ENV` → **`CENVKIT_ENV`** (shell `CENVKIT_ENV` › `.env`
+  `CENVKIT_ENV=` › `dev`).
+- interpolation token `${COMPOSE_ENV}` → **`${CENVKIT_ENV}`** (`${ENV}` still works).
+
+`COMPOSE_ENV_FILES` (the real Docker Compose variable) is **unaffected**.
+
+Migration: rename your chain file, and `s/COMPOSE_ENV/CENVKIT_ENV/` in your `.env`
+files and compose YAML (chain selector + `${...}` interpolation tokens).
+
 ### Changed — `env_file:` is runtime-only (Layer-2 debug-only) ⚠ behavior change
 
 **BREAKING (pre-1.0).** A service `env_file:` is no longer folded into
