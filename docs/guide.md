@@ -242,6 +242,79 @@ $ cenvkit init
 # web/example.env   -> web/.env    (created, fan-out)
 ```
 
+### `cenvkit run`
+
+Exec any command with the merged chain environment — the no-docker local arm, so
+the same chain that feeds compose also drives your tests, scripts, and tools:
+
+```sh
+cenvkit run -- npm run dev           # the chain env, injected into the process
+cenvkit run -e prod -- ./migrate     # with the prod tier
+cenvkit run --no-expand -- printenv  # leave ${VAR} literal
+cenvkit run --print                  # dump what it WOULD inject (dotenv), no exec
+```
+
+`--expand` (default) resolves `${VAR}` / `${VAR:-def}` via compose-go's dotenv
+engine — identical to what `docker compose` interpolates. The shell env wins over
+the chain (compose parity). Exit codes propagate: the child's code, or **127**
+(missing binary) / **126** (non-executable) / **128+signo** (signal). `--` is
+required before the command.
+
+### `cenvkit env`
+
+Emit the merged chain environment for CI, scripts, or `eval` — chain-derived keys
+only, sorted:
+
+```sh
+cenvkit env                           # dotenv (KEY=VALUE)
+cenvkit env --format json             # a JSON object
+eval "$(cenvkit env --format shell)"  # load into the current shell (export …)
+```
+
+`cenvkit env --expand` is byte-identical to `env-debug --effective` and to
+`docker compose config` (one expansion engine). `-e <env>` / `--no-expand` work as
+for `run`.
+
+### `cenvkit gap-report`
+
+The CI / pre-build lint over the gap `env-debug` detects — daemon-free, so it runs
+before `docker build`:
+
+```sh
+cenvkit gap-report          # exit 1 = a ${VAR} is env_file-only; 0 = clean; 2 = no compose file
+cenvkit gap-report --json   # {"gaps":[{var,service,field,fallback,fix}],"count":N}
+```
+
+Wire it into CI to fail the build when a `${VAR}` would silently fall back to its
+`:-default` because the value lives only in a service `env_file:`.
+
+### Named chains
+
+`.cenvkit.envchain` may carry optional `[name]` sections; `--chain <name>` (on every
+command) selects one — the default is the header-less / `[default]` list:
+
+```
+[default]
+.env
+.${CENVKIT_ENV}.env
+.secrets.env
+
+[ci]
+.env
+.ci.env
+```
+
+Sections are standalone (no inheritance from `[default]`) and orthogonal to
+`CENVKIT_ENV` (`--chain ci` × `CENVKIT_ENV=prod` are independent). An unknown
+`--chain` exits 2 listing the available names.
+
+### Secrets — out of scope
+
+cenvkit does **not** manage, mask, or encrypt secrets. `.secrets.env` just loads
+**last** in the chain (last-wins); nothing is written to disk. For real secret
+management, wrap cenvkit with an external tool:
+`sops exec-env -- cenvkit run -- <cmd>`.
+
 ---
 
 ## 6. Monorepos

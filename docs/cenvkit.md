@@ -94,12 +94,16 @@ go build -o .cenvkit.bin ./cmd/cenvkit   # .cenvkit.bin is gitignored
 | `cenvkit compose <args>` | assemble the Layer-1 chain, `exec docker compose <args>` (the core) |
 | `cenvkit env-files` | print the resolved `COMPOSE_ENV_FILES` (**Layer 1 only**), one path per line |
 | `cenvkit env-debug [--trace --var V\|--effective [--service S]\|--value --var V\|--list\|--files\|--overview] [--json]` | daemon-free debugger / gap-detector |
+| `cenvkit gap-report [--json]` | CI/pre-build lint: exit **1** if any `${VAR}` is satisfied only by a service `env_file:`, **0** clean, **2** if no compose file is found (daemon-free) |
+| `cenvkit run [-e ENV] [--expand\|--no-expand] [--print] -- <cmd> [args]` | exec a process with the merged chain env (no docker); propagates the child's exit code |
+| `cenvkit env [-e ENV] [--expand\|--no-expand] [--format dotenv\|json\|shell]` | emit the merged chain env (chain-derived keys, sorted) for CI / scripts / `eval` |
 | `cenvkit validate [--all]` | `docker compose config -q`; `--all` validates dev AND prod |
 | `cenvkit init` | seed `.X` from `example.X` (**no-clobber**), fan out one directory level |
 | `cenvkit version` | print the version |
 
-Global: `--project-dir <dir>` (default: current directory) ·
-`--color auto|always|never` (default `auto`).
+Global: `--project-dir <dir>` (default: current directory) · `--chain <name>` (a
+named `[name]` section of `.cenvkit.envchain`; default = the header-less /
+`[default]` list) · `--color auto|always|never` (default `auto`).
 
 **Color.** Human output is colored when stdout is a terminal and plain when piped
 / redirected. `--color=never` disables, `--color=always` forces (even when piped).
@@ -138,6 +142,27 @@ appears in chain attribution if it is a chain key). The `--effective` view never
 reports a resolution the real run won't produce. Provenance uses compose-go's own
 `dotenv` + `template` packages (docker-compose parity).
 
+## `run` / `env` / `gap-report` — deliver & lint
+
+The same Layer-1 chain that feeds `compose` drives any consumer:
+
+- **`run -- <cmd>`** flattens the chain to a merged `KEY=VALUE` env and execs the
+  process with it — no docker. `--expand` (default) resolves `${VAR}` / `${VAR:-def}`
+  via compose-go's dotenv engine (values match `docker compose`); `--no-expand` keeps
+  them literal. The shell env wins over the chain (compose parity). Exit codes: the
+  child's, or **127** missing binary / **126** non-executable / **128+signo** on a
+  signal. `--print` dumps the env and skips the exec. `--` is required.
+- **`env`** emits that same merged env (chain-derived keys only, sorted) as
+  `--format dotenv` (default) / `json` / `shell` — e.g. `eval "$(cenvkit env --format shell)"`.
+  `cenvkit env --expand` == `env-debug --effective` == `docker compose config` (one
+  expansion engine).
+- **`gap-report`** is the CI/pre-build lint over the same gap `env-debug` detects:
+  exit **1** if any `${VAR}` is env_file-only (the var/service/field/fallback; `--json`
+  for tooling), **0** clean, **2** if no compose file is found. Daemon-free — run it
+  before `docker build`.
+
+`-e <env>` overrides `CENVKIT_ENV` for one invocation.
+
 ## Behavior contracts (what to rely on)
 
 - **`env_file:` is runtime-only.** A `${VAR}` defined *only* in a service
@@ -165,9 +190,15 @@ reports a resolution the real run won't produce. Provenance uses compose-go's ow
 ## Configuration
 
 - `.cenvkit.envchain` — the Layer-1 chain (one path template per line; `#`
-  comments and blank lines ignored). Back-compatible with the sh kit's format.
+  comments and blank lines ignored). May carry optional **`[name]` sections**.
+- **Named chains** — `--chain <name>` selects a `[name]` section (default = the
+  header-less / `[default]` list). Standalone (no inheritance), orthogonal to
+  `CENVKIT_ENV`; an unknown name exits 2 listing the available ones.
 - `CENVKIT_ENV` — selects the env tier (shell > `.env`'s `CENVKIT_ENV=` > `dev`).
 - `COMPOSE_FILE`, `COMPOSE_PROFILES`, `HOSTNAME`/`HOST` — honored as above.
+- **Secrets are out of scope** — cenvkit never masks/encrypts/manages them;
+  `.secrets.env` just loads last (last-wins), nothing written to disk. Wrap with an
+  external manager: `sops exec-env -- cenvkit run -- <cmd>`.
 
 ## Architecture / contributing
 
