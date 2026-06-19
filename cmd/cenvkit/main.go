@@ -44,6 +44,45 @@ func composeGoVersion() string {
 	return ""
 }
 
+// resolveVersion returns a meaningful version string for any build path:
+//   - ldflags-injected (release or `make install` git-describe stamp): returned as-is.
+//   - `go install module@vX` / `@latest`: bi.Main.Version is a real or pseudo-version.
+//   - plain `go build`: vcs.revision from build settings gives dev+<commit>[-dirty].
+//   - no build info: falls back to the bare "dev" default.
+func resolveVersion() string {
+	if version != "dev" {
+		return version // release build or Makefile git-describe stamp; do not override
+	}
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return version
+	}
+	if bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version // go install module@vX or @latest
+	}
+	// Plain `go build`: derive from VCS info embedded by the toolchain.
+	var rev, modified string
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			modified = s.Value
+		}
+	}
+	if rev == "" {
+		return version
+	}
+	if len(rev) > 12 {
+		rev = rev[:12]
+	}
+	v := "dev+" + rev
+	if modified == "true" {
+		v += "-dirty"
+	}
+	return v
+}
+
 // styler is resolved once in the root PersistentPreRunE from --color and used by
 // every subcommand for human output. currentStyler() is nil-safe so a subcommand
 // invoked without the root pre-run (e.g. a direct unit test) still gets plain.
@@ -88,7 +127,7 @@ func newRootCmd() *cobra.Command {
 		Short: "Print the cenvkit version",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			out := cmd.OutOrStdout()
-			_, _ = fmt.Fprintln(out, version)
+			_, _ = fmt.Fprintln(out, resolveVersion())
 			if cgv := composeGoVersion(); cgv != "" {
 				_, _ = fmt.Fprintln(out, "compose-go "+cgv)
 			}

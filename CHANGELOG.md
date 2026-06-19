@@ -12,6 +12,15 @@ to [Semantic Versioning](https://semver.org/) and the
   line (e.g. `compose-go v2.11.0`); the first line stays the bare version for
   script compat. Surfaces which compose-go the binary is built against — the
   transparency half of the SemVer-not-pegged-to-compose decision.
+- Non-release builds now report a meaningful version instead of `dev`: `make
+  install`/`make dev-build` stamp `git describe` (e.g. `v0.5.0-3-g62b9e55`), and a
+  `runtime/debug.ReadBuildInfo()` fallback covers `go install …@latest` (the module
+  version) and plain `go build` (`dev+<commit>[-dirty]`). Release builds are
+  unchanged — goreleaser injects the clean tag version.
+- **Releases:** a tag-triggered `.github/workflows/release.yml` runs goreleaser to
+  publish cross-OS binaries (linux/darwin/windows × amd64/arm64) + `checksums.txt`
+  on every `vX.Y.Z` tag (the `.goreleaser.yaml` matrix was already validated by CI's
+  `goreleaser check`; verified locally with `goreleaser release --snapshot`).
 
 ## [0.5.0] - 2026-06-19
 

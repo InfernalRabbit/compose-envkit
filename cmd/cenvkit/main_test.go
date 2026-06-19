@@ -10,7 +10,8 @@ import (
 )
 
 // version subcommand output via the cobra OutOrStdout() wiring (spec §5).
-// Line 1 is the bare version var (script-compat contract).
+// Line 1 is resolveVersion() (script-compat contract; equals the ldflags var on
+// release builds, and a derived dev+<commit>[-dirty] string on plain go build).
 // Line 2 is the linked compose-go version (transparency line; present whenever
 // runtime/debug.ReadBuildInfo() resolves the dep, including in `go test`).
 func TestVersionSubcommand(t *testing.T) {
@@ -22,13 +23,28 @@ func TestVersionSubcommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	// assertion 1: first line == version (script-compat contract)
-	if lines[0] != version {
-		t.Fatalf("version line 1 = %q, want %q", lines[0], version)
+	// assertion 1: first line == resolveVersion() (robust across build envs)
+	want := resolveVersion()
+	if lines[0] != want {
+		t.Fatalf("version line 1 = %q, want resolveVersion()=%q", lines[0], want)
 	}
 	// assertion 2: second line starts with "compose-go " (linked-dep transparency)
 	if len(lines) < 2 || !strings.HasPrefix(lines[1], "compose-go ") {
 		t.Fatalf("version line 2 must start with \"compose-go \", got lines=%q", lines)
+	}
+}
+
+// TestResolveVersion_LdflagsWins: when the package-level version var is set to a
+// non-"dev" value (simulating an ldflags release stamp or Makefile git-describe),
+// resolveVersion() must return it verbatim without querying build info.
+func TestResolveVersion_LdflagsWins(t *testing.T) {
+	orig := version
+	version = "v1.2.3"
+	defer func() { version = orig }()
+
+	got := resolveVersion()
+	if got != "v1.2.3" {
+		t.Fatalf("resolveVersion() with version=%q = %q, want %q", version, got, "v1.2.3")
 	}
 }
 

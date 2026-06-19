@@ -30,6 +30,13 @@ DEV_BIN := .cenvkit.bin
 # writable (cenvkit never invokes sudo).
 PREFIX  :=
 
+# Version stamping for non-release builds: `git describe` (tag + commits-since +
+# short-hash, "-dirty" if the tree is modified), falling back to "dev". goreleaser
+# injects its own clean version at release time, so this only affects local
+# `make dev-build`/`install`. Override with `make install VERSION=v1.2.3`.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X main.version=$(VERSION)
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Phony declarations (every target)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -55,8 +62,8 @@ build: ## Compile-check all packages (go build ./...)
 	go build ./...
 
 dev-build: ## Build a fast local binary → $(DEV_BIN) (gitignored)
-	go build -o $(DEV_BIN) $(PKG)
-	@echo "Local binary: $(DEV_BIN)"
+	go build -ldflags "$(LDFLAGS)" -o $(DEV_BIN) $(PKG)
+	@echo "Local binary: $(DEV_BIN) ($(VERSION))"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Install / uninstall
@@ -64,14 +71,14 @@ dev-build: ## Build a fast local binary → $(DEV_BIN) (gitignored)
 
 install: ## Install cenvkit from the LOCAL repo into $(GOBIN) (or PREFIX/bin via go install)
 ifdef PREFIX
-	@echo "Installing $(BINARY) into $(PREFIX)/bin via go install …"
+	@echo "Installing $(BINARY) $(VERSION) into $(PREFIX)/bin via go install …"
 	mkdir -p $(abspath $(PREFIX)/bin)
-	GOBIN=$(abspath $(PREFIX)/bin) go install $(PKG)
+	GOBIN=$(abspath $(PREFIX)/bin) go install -ldflags "$(LDFLAGS)" $(PKG)
 	@echo "Installed: $(abspath $(PREFIX)/bin)/$(BINARY)"
 	@echo "NOTE: $(PREFIX)/bin must be writable; cenvkit never uses sudo."
 else
-	go install $(PKG)
-	@echo "Installed: $(GOBIN)/$(BINARY)"
+	go install -ldflags "$(LDFLAGS)" $(PKG)
+	@echo "Installed: $(GOBIN)/$(BINARY) ($(VERSION))"
 endif
 
 uninstall: ## Remove the installed cenvkit binary
