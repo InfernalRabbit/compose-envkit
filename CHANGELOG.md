@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-19
+
 ### Added
 
 - `cenvkit version` now also prints the linked **compose-go** version on a second
