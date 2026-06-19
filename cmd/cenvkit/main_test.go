@@ -10,6 +10,9 @@ import (
 )
 
 // version subcommand output via the cobra OutOrStdout() wiring (spec §5).
+// Line 1 is the bare version var (script-compat contract).
+// Line 2 is the linked compose-go version (transparency line; present whenever
+// runtime/debug.ReadBuildInfo() resolves the dep, including in `go test`).
 func TestVersionSubcommand(t *testing.T) {
 	root := newRootCmd()
 	var buf bytes.Buffer
@@ -18,8 +21,14 @@ func TestVersionSubcommand(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if got := bytes.TrimSpace(buf.Bytes()); string(got) != version {
-		t.Fatalf("version output = %q, want %q", got, version)
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	// assertion 1: first line == version (script-compat contract)
+	if lines[0] != version {
+		t.Fatalf("version line 1 = %q, want %q", lines[0], version)
+	}
+	// assertion 2: second line starts with "compose-go " (linked-dep transparency)
+	if len(lines) < 2 || !strings.HasPrefix(lines[1], "compose-go ") {
+		t.Fatalf("version line 2 must start with \"compose-go \", got lines=%q", lines)
 	}
 }
 

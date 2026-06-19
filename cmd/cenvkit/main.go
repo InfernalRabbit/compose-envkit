@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"syscall"
@@ -26,6 +27,22 @@ import (
 
 // version is overridden at release time via -ldflags "-X main.version=...".
 var version = "dev"
+
+// composeGoVersion returns the linked compose-go module version read at runtime
+// from the binary's build info. Returns "" if build info is unavailable (e.g.
+// in some test harnesses) or the dep is not found.
+func composeGoVersion() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	for _, dep := range bi.Deps {
+		if dep.Path == "github.com/compose-spec/compose-go/v2" {
+			return dep.Version
+		}
+	}
+	return ""
+}
 
 // styler is resolved once in the root PersistentPreRunE from --color and used by
 // every subcommand for human output. currentStyler() is nil-safe so a subcommand
@@ -70,7 +87,11 @@ func newRootCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print the cenvkit version",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), version)
+			out := cmd.OutOrStdout()
+			_, _ = fmt.Fprintln(out, version)
+			if cgv := composeGoVersion(); cgv != "" {
+				_, _ = fmt.Fprintln(out, "compose-go "+cgv)
+			}
 			return nil
 		},
 	})

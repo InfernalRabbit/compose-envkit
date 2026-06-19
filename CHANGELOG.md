@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/) and the
 
 ## [Unreleased]
 
+### Added
+
+- `cenvkit version` now also prints the linked **compose-go** version on a second
+  line (e.g. `compose-go v2.11.0`); the first line stays the bare version for
+  script compat. Surfaces which compose-go the binary is built against — the
+  transparency half of the SemVer-not-pegged-to-compose decision.
+
 ## [0.5.0] - 2026-06-19
 
 ### Fixed — first green CI · Docker Compose portability
