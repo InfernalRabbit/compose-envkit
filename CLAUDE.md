@@ -41,7 +41,11 @@ implementation. Design:
 ## Verification commands
 
 - Go: `go build ./...` · `go vet ./...` · `gofmt -l .` (must be empty) ·
-  `go test ./... -count=1` (and `golangci-lint run` if installed).
+  `go test ./... -count=1` · `golangci-lint run ./...` (REQUIRED — CI runs it;
+  install it built with the PROJECT's Go via `go install
+  .../golangci-lint/v2/cmd/golangci-lint@<ver>`, NOT a prebuilt binary built with an
+  older Go — that refuses a newer go.mod target). golangci-lint UNDERCOUNTS its
+  printed list (`max-same-issues` caps repeats) — fix to a true `0`, don't trust the count.
 - Acceptance: `go test ./test/...` — docker-gated, drives the `cenvkit` binary
   against `examples/monorepo` (the ported smoke suite); also run with
   `SMOKE_SKIP_DOCKER=1` for the no-docker subset.
@@ -52,6 +56,13 @@ implementation. Design:
   assertion unrun under a behavior change; gofmt, thrice). **Re-run `gofmt -l .`
   AFTER your final edit before reporting green — a pass from an earlier run (a late
   edit not re-checked) is the recurring miss.**
+- **Local-green ≠ CI-green for version-sensitive tools.** The local gate uses
+  whatever `docker compose` / `golangci-lint` you have, which can differ from CI's —
+  a green local run can hide a CI failure (local compose v5.1.2 tolerated an
+  `include:` conflict CI's v2.38.2 rejects → 3 days red). For compose-touching
+  changes, verify on the CI version (`docker compose config` under a pinned
+  container, e.g. `docker-compose:2.38.2`). The local gate is necessary, NOT
+  sufficient — a push isn't done until the CI run is green (TEAM.md "Git discipline").
 
 ## Conventions
 

@@ -119,6 +119,12 @@ pop`. A green working-tree test while other agents are editing can hide a broken
 staged subset. Freeze ALL teammates before running a "final" verify — a raced
 verify yields stale, misleading results.
 
+**Post-push CI (gh, 2026-06-19):** a master push is NOT "done" until the CI run is
+GREEN — pushes were verified locally but never on CI, leaving master red ~3 days.
+`gh` is installed: after `git push`, confirm with `gh run watch <id> --exit-status`;
+on failure pull per-job logs via `gh run view`/`gh api` (the Actions log API 403s
+unauthenticated — don't fall back to credential-helper token-fishing).
+
 ## blockedBy / completed discipline
 
 Don't start or commit a `blockedBy` task without asking the lead. `completed` only

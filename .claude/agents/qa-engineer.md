@@ -64,6 +64,11 @@ name for prod bugs. `.claude/TEAM.md` is NOT auto-loaded — read it first.
   source + run the specific failing test uncached (`go test -run X -count=1`)
   before writing a prod-fix request — the failure may be against a stale snapshot.
   Wait for go-engineer to freeze before running the full suite as a verify gate.
+- **Surface subprocess stderr.** A test helper that execs a subprocess (the
+  `cenvkit` binary, `docker compose`, …) MUST print its `CombinedOutput()`/stderr on
+  failure — never a bare `"... exit status N"`. (A masked `exit status 1` hid
+  docker's real `services.web conflicts with imported resource` → a whole
+  log-spelunking session, 2026-06-19.)
 - **Verify-before-claim:** cite the `file:line`/symbol a test targets.
 - **Capture** a lesson (memory) on a bounced review / user correction / gotcha
   before "done".
