@@ -1,6 +1,6 @@
 ---
 name: local-compose-version-masks-ci
-description: The local docker-compose used by the acceptance gate is NEWER/more tolerant than CI's — a green local `go test ./test/...` can hide compose-invalidity that CI (older compose) rejects. Test the supported floor, not just local.
+description: Local TOOL versions (docker compose, golangci-lint) differ from CI's — a green local run hides CI failures from tool-version mismatch (compose tolerance; golangci-lint build-Go). Test against CI's versions, not just local.
 metadata:
   type: feedback
 ---
@@ -36,5 +36,15 @@ red, across the entire C1–C4 build.
 - **golangci-lint isn't installed locally**, so CLAUDE.md's "golangci-lint if
   installed" gate silently skipped it — CI caught 15 `errcheck` issues in the new
   C1–C4 code. Install + run it in the local gate, or stop calling the gate "full".
+- **golangci-lint's CI binary must be built with the project's Go.** the
+  `golangci-lint-action` ships a prebuilt binary built with an OLDER Go (go1.24)
+  that refuses to lint a go1.26 go.mod (`the Go language version used to build
+  golangci-lint is lower than the targeted Go version`) — RED on the first v0.5.0
+  push (everything else green). Fix: `go install
+  .../golangci-lint/v2/cmd/golangci-lint@<ver>` in the lint job so it's built with
+  the job's Go (not the action's prebuilt binary).
+- **golangci-lint UNDERCOUNTS its printed issues** (`max-same-issues: 3` /
+  `max-issues-per-linter: 50` defaults): an "11 issues" view was really ~40
+  errcheck sites. Fix to a true `0`; don't treat the printed list as exhaustive.
 
 See also [[cenvkit-c1-c4-build-orchestration]], [[verify-committed-tree-during-concurrent-edits]].
